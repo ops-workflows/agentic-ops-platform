@@ -1,0 +1,76 @@
+# examples/workflow-repo/workflows/example-workflow/agent.yaml
+# Copy this template to create a new workflow package.
+# This file lives in an example workflow repo — copy the whole
+# examples/workflow-repo/ directory to bootstrap your own workflow repo,
+# or just this workflows/example-workflow/ directory to add one workflow.
+# Fill in all {PLACEHOLDER} values.
+#
+# This file holds PLATFORM-LEVEL config only (secrets, schedules, runtime).
+# Claude Code native files are authored directly alongside this file:
+#   settings.json         — Claude-native permissions + sandbox
+#   .mcp.json             — MCP servers (auth + session headers)
+#   agents/*.md           — Agent prompts (YAML frontmatter + instructions)
+#   skills/*/SKILL.md     — Domain knowledge
+#   hooks/hooks.json      — Hook registrations
+
+name: "{WORKFLOW_NAME}"
+description: "{Brief description of what this workflow does}"
+version: "1.0.0"
+
+session:
+  max_turns: 50
+  model: local
+
+# ── Non-secret MCP target settings (plain env vars) ────────────────
+# These become runtime env vars available for ${VAR} expansion in .mcp.json.
+# Use this for target instance URLs, regions, account IDs, and similar
+# per-workflow routing metadata.
+env: {}
+  # SERVICE_API_URL: https://service.example.com
+  # SPLUNK_BASE_URL: https://splunk.example.com:8089
+  # AWS_REGION: eu-west-1
+  # AWS_ACCOUNT_ID: "123456789012"
+
+# ── Secrets (age-encrypted, decrypted → container env vars) ─────────
+# Set via: `agentic-ops secrets set {WORKFLOW_NAME} SECRET_NAME`
+# SECURITY: Available to Claude Code for ${VAR} expansion in .mcp.json.
+# Constrain Bash via settings.json sandbox + permission rules.
+# Platform-level credentials such as MESSAGE_BUS_BOT_TOKEN belong in
+# platform-config.yaml, not here.
+secrets: {}
+  # API_TOKEN:
+  #   encrypted: "ENC[age,<set via UI or CLI>]"
+  #   description: "Workflow-specific API token"
+
+# NOTE: Sandbox credential isolation is configured in settings.json under
+# sandbox.credentials.envVars. The runtime auto-populates that deny-list at
+# workspace assembly from the secrets declared above plus every secret in
+# platform-config.yaml (and MESSAGE_BUS_BOT_TOKEN), so you normally don't edit it.
+
+# ── Runtime ─────────────────────────────────────────────────────────
+runtime:
+  parallel_workers: 2
+  heartbeat_interval_sec: 30
+  lost_task_timeout_sec: 300
+  runtime_timeout_sec: 300
+  ask_user_question_reminder:
+    enabled: true
+    min_turns: 10
+    turn_budget_ratio: 0.7
+    time_budget_ratio: 0.75
+    recent_question_turn_window: 8
+  container_image: agentic-ops-runtime:latest
+  memory_volumes:
+    - "agent-memory-{WORKFLOW_NAME}:/workspace/.claude/agent-memory"
+
+# ── Schedules ───────────────────────────────────────────────────────
+schedules: []
+  # - name: my-schedule
+  #   cron: "0 8 * * 1-5"
+  #   prompt: "Do something on schedule"
+
+# ── Messaging (platform routing) ───────────────────────────────────
+messaging:
+  channels:
+    - "{CHANNEL_NAME}"
+  trigger_pattern: "@agent"

@@ -1,0 +1,78 @@
+platformConfig:
+  existingSecret: my-workflow-repo-platform-config
+
+workflowRepo:
+  mountPath: /app/workflow-repos/my-workflow-repo
+  workflowRoot: ""
+  workflowRepoPaths: /app/workflow-repos/my-workflow-repo
+  existingClaim: my-workflow-repo
+
+runtimeBundles:
+  uriTemplate: s3://agentic-ops-bundles/my-workflow-repo/{workflow}
+
+images:
+  gateway:
+    repository: agentic-ops-gateway
+    tag: latest
+  sessionManager:
+    repository: agentic-ops-session-manager
+    tag: latest
+  controlPlaneUi:
+    repository: agentic-ops-control-plane-ui
+    tag: latest
+  # Every entry under mcps:/connectors: below runs from this ONE image (the
+  # chart has no per-service build context, unlike the compose override). To
+  # add your own MCP server or connector (see the "custom-example" entries
+  # below), build a combined image containing both the public mcps/connectors
+  # packages and your own modules, and publish it as this repository:tag.
+  mcp:
+    repository: my-workflow-repo-mcps
+    tag: latest
+  connector:
+    repository: my-workflow-repo-connectors
+    tag: latest
+
+mcps:
+  message:
+    enabled: true
+    module: mcps.core.mcp_message
+    port: 8100
+  memory:
+    enabled: true
+    module: mcps.core.mcp_memory
+    port: 8103
+  platform:
+    enabled: true
+    module: mcps.core.mcp_platform
+    port: 8105
+  salesforce:
+    enabled: true
+    module: mcps.integrations.mcp_salesforce
+    port: 8102
+  custom-example:
+    enabled: false
+    module: mcp_custom_example
+    port: 8110
+
+connectors:
+  gcpPubsub:
+    enabled: true
+    command:
+      - python
+      - /app/connectors/gcp-pubsub-connector/main.py
+    env:
+      CONNECTOR_INSTANCE_ID: my-connector-instance
+  servicenow:
+    enabled: false
+    command:
+      - python
+      - /app/connectors/servicenow-connector/main.py
+    env:
+      CONNECTOR_INSTANCE_ID: my-servicenow-instance
+  custom-example:
+    enabled: false
+    command:
+      - python
+      - /app/connectors/custom-connector-example/main.py
+    env:
+      CONNECTOR_INSTANCE_ID: my-connector-instance

@@ -1,0 +1,6 @@
+fastmcp>=3.0.0
+uvicorn>=0.30
+httpx>=0.27
+boto3>=1.35
+pyyaml>=6.0.1
+pyrage>=1.1.0

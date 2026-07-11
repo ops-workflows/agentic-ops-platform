@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "agent": "test-coordinator",
+  "permissions": {
+    "ask": [
+      "Bash(echo approval-needed *)"
+    ],
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(curl *)",
+      "Read(./.env)",
+      "Read(./secrets/**)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": false,
+    "autoAllowBashIfSandboxed": true,
+    "allowUnsandboxedCommands": true,
+    "filesystem": {
+      "allowWrite": [".", "/tmp"],
+      "denyRead": ["./.env", "./secrets/**"]
+    },
+    "network": {
+      "allowedDomains": [
+        "host.docker.internal",
+        "fake-message",
+        "fake-hindsight",
+        "fake-mcp"
+      ]
+    },
+    "credentials": {
+      "envVars": [
+        {
+          "name": "EXAMPLE_EXTRA_SECRET",
+          "mode": "deny"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,53 @@
+# Test platform-config.yaml — used by runtime scenario tests.
+#
+# The runtime conftest dynamically rewrites this file with actual ports
+# assigned to the fake services started per test session.
+#
+# When running outside the test harness the `test` profile points at
+# localhost, which is harmless (nothing is listening there).
+config:
+  AGE_PUBLIC_KEY: ""
+  PG_HOST: localhost
+  PG_PORT: "5432"
+  PG_DB: agentic_ops
+  PG_USER: agentic_ops
+  PG_PASSWORD: localdev-postgres-password
+  MESSAGE_BUS_API_URL: http://host.docker.internal:18065
+  MESSAGE_BUS_TEAM_NAME: test-team
+  CONTROL_PLANE_UI_URL: http://localhost:3000
+
+runtime_env:
+  ANTHROPIC_API_KEY: null
+  DISABLE_TELEMETRY: true
+  DISABLE_ERROR_REPORTING: true
+  DISABLE_FEEDBACK_COMMAND: true
+  CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: true
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: true
+
+default_model_profile: test
+
+model_profiles:
+  # The `test` profile is the primary profile for runtime scenario tests.
+  # ANTHROPIC_BASE_URL is overwritten by the runtime conftest to point at
+  # the mock LLM server's dynamic port via host.docker.internal.
+  test:
+    ANTHROPIC_BASE_URL: http://host.docker.internal:19999
+    ANTHROPIC_AUTH_TOKEN: test-token
+    ANTHROPIC_MODEL: test-model
+    ANTHROPIC_DEFAULT_OPUS_MODEL: test-model
+    ANTHROPIC_DEFAULT_SONNET_MODEL: test-model
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: test-model
+    CLAUDE_CODE_SUBAGENT_MODEL: test-model
+  # Keep a `local` alias that maps to the same structure so the fixture
+  # agent.yaml (session.model: local) resolves correctly in unit tests
+  # that load this file.
+  local:
+    ANTHROPIC_BASE_URL: http://host.docker.internal:19999
+    ANTHROPIC_AUTH_TOKEN: test-token
+    ANTHROPIC_MODEL: test-model
+    ANTHROPIC_DEFAULT_OPUS_MODEL: test-model
+    ANTHROPIC_DEFAULT_SONNET_MODEL: test-model
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: test-model
+    CLAUDE_CODE_SUBAGENT_MODEL: test-model
+
+secrets: {}

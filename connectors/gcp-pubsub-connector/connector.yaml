@@ -1,0 +1,47 @@
+# Generic GCP Pub/Sub connector.
+# Private workflow repositories can provide an alternate connector.yaml through
+# CONNECTOR_CONFIG_FILE or a Docker Compose/Kubernetes mount.
+name: gcp-pubsub-connector
+description: Generic GCP Pub/Sub task ingestion connector
+
+metadata:
+  display_name: GCP Pub/Sub Intake
+  summary: Reads Pub/Sub messages and creates workflow tasks using configurable prompt and metadata mappings.
+  source_label: GCP Pub/Sub subscription
+  tags:
+    - GCP
+    - Pub/Sub
+    - Event intake
+
+source:
+  type: pubsub
+  subscription: ${GCP_PUBSUB_SUBSCRIPTION}
+  # Optional GCS object payload fetch for object notification messages.
+  # gcs_payload:
+  #   enabled: true
+  #   bucket_field: bucket
+  #   name_field: name
+  #   metadata_key: object_text
+  #   max_bytes: 200000
+
+target:
+  workflow: example-workflow
+  message_channel: ops-alerts
+  channel: gcp-pubsub
+  prompt_template: |
+    Process this Pub/Sub event.
+
+    Message ID: {message_id}
+    Payload:
+    {payload_text}
+
+parsing:
+  format: json
+  extract:
+    event_id: id
+    event_type: type
+
+coalescing:
+  enabled: false
+  window_sec: 300
+  key_field: event_id

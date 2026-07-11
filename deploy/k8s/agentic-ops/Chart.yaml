@@ -1,0 +1,6 @@
+apiVersion: v2
+name: agentic-ops
+version: 0.1.0
+appVersion: "0.1.0"
+description: Bundle-first Agentic Ops platform deployment chart
+type: application

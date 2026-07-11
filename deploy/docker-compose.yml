@@ -1,0 +1,362 @@
+# Agentic Ops — Docker Compose
+# Shared services for the workflow-oriented platform deployment
+
+services:
+  # ─── Shared Infrastructure ─────────────────────────────────────────
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../shared/lib/init_db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    environment:
+      POSTGRES_DB: agentic_ops
+      POSTGRES_USER: agentic_ops
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-localdev-postgres-password}
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentic_ops -d agentic_ops"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - ai-ops-network
+
+  minio:
+    image: minio/minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    environment:
+      MINIO_ROOT_USER: ${OBJECT_STORE_ACCESS_KEY:-agentic_ops}
+      MINIO_ROOT_PASSWORD: ${OBJECT_STORE_SECRET_KEY:-localdev-minio-password}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - ai-ops-network
+
+  minio-init:
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 $${OBJECT_STORE_ACCESS_KEY} $${OBJECT_STORE_SECRET_KEY};
+        mc mb --ignore-existing local/agent-memory;
+        mc mb --ignore-existing local/agentic-ops-bundles;
+        exit 0;
+      "
+    environment:
+      OBJECT_STORE_ACCESS_KEY: ${OBJECT_STORE_ACCESS_KEY:-agentic_ops}
+      OBJECT_STORE_SECRET_KEY: ${OBJECT_STORE_SECRET_KEY:-localdev-minio-password}
+    networks:
+      - ai-ops-network
+
+  hindsight:
+    image: ghcr.io/vectorize-io/hindsight:latest
+    restart: unless-stopped
+    environment:
+      HINDSIGHT_API_LLM_PROVIDER: ${HINDSIGHT_API_LLM_PROVIDER:-openai}
+      HINDSIGHT_API_LLM_BASE_URL: ${HINDSIGHT_API_LLM_BASE_URL:-http://model-gateway:1235/v1}
+      HINDSIGHT_API_LLM_API_KEY: ${HINDSIGHT_API_LLM_API_KEY:-localdev-key}
+      HINDSIGHT_API_LLM_MODEL: ${HINDSIGHT_API_LLM_MODEL:-example-model}
+      HINDSIGHT_API_DATABASE_URL: postgresql://agentic_ops:${PG_PASSWORD:-localdev-postgres-password}@postgres:5432/agentic_ops
+      HINDSIGHT_API_DATABASE_SCHEMA: hindsight
+      HINDSIGHT_API_VECTOR_EXTENSION: pgvector
+      HINDSIGHT_API_RUN_MIGRATIONS_ON_STARTUP: "true"
+      HINDSIGHT_API_RERANKER_LOCAL_MODEL: cross-encoder/ms-marco-MiniLM-L-6-v2
+      HINDSIGHT_API_LAZY_RERANKER: "true"
+      HINDSIGHT_API_EMBEDDINGS_PROVIDER: ${HINDSIGHT_API_EMBEDDINGS_PROVIDER:-openai}
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL:-http://model-gateway:1235/v1}
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY:-localdev-key}
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL:-example-embedding-model}
+      HINDSIGHT_API_FILE_STORAGE_TYPE: native
+    volumes:
+      - hindsight-data:/home/hindsight/.hindsight
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8888:8888"
+    networks:
+      - ai-ops-network
+
+  # A host-native local LLM provider runs on the GPU host. The containerized
+  # proxy forwards requests into the Docker network without tying the stack to
+  # one specific provider implementation.
+  local-llm:
+    image: alpine:3.20
+    profiles: ["local-llm"]
+    command: >
+      sh -c "echo 'Local LLM proxy: forwarding to host provider on port 8000' &&
+             apk add --no-cache socat &&
+             socat TCP-LISTEN:8000,fork,reuseaddr TCP:host.docker.internal:8000 &
+             wait"
+    restart: unless-stopped
+    networks:
+      - ai-ops-network
+
+  model-gateway:
+    image: docker.litellm.ai/berriai/litellm:main-latest
+    command: ["--config", "/app/config.yaml", "--port", "1235"]
+    profiles: ["model-gateway"]
+    restart: unless-stopped
+    environment:
+      MODEL_GATEWAY_API_KEY: ${MODEL_GATEWAY_API_KEY:-localdev-key}
+    volumes:
+      - ${HOST_LITELLM_CONFIG_FILE:-../examples/workflow-repo/litellm.config.example.yaml}:/app/config.yaml:ro
+    networks:
+      - ai-ops-network
+
+  # ─── Platform Services ─────────────────────────────────────────────
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: gateway/Dockerfile
+    restart: unless-stopped
+    environment:
+      AGE_IDENTITY: file:/run/secrets/age_identity
+      PLATFORM_CONFIG_FILE: /app/platform-config.yaml
+      WORKFLOW_ROOT: /app/workflows
+      WORKFLOW_REPO_PATHS: ${WORKFLOW_REPO_PATHS:-/app/workflows}
+    volumes:
+      - ../key.txt:/run/secrets/age_identity:ro
+      - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
+      - ${HOST_WORKFLOW_REPO_PATH:-../examples/workflow-repo/workflows}:/app/workflows:ro
+      - ../connectors:/app/connectors:ro
+      - ../shared:/app/shared:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    networks:
+      - ai-ops-network
+
+  session-manager:
+    build:
+      context: ..
+      dockerfile: session-manager/Dockerfile
+    restart: unless-stopped
+    environment:
+      POLL_INTERVAL_SEC: ${POLL_INTERVAL_SEC:-2}
+      AGE_IDENTITY: file:/run/secrets/age_identity
+      PLATFORM_CONFIG_FILE: /app/platform-config.yaml
+      WORKFLOW_ROOT: /app/workflows
+      WORKFLOW_REPO_PATHS: ${WORKFLOW_REPO_PATHS:-/app/workflows}
+      RUNTIME_BUNDLE_ROOT: ${RUNTIME_BUNDLE_ROOT:-/tmp/agentic-ops-runtime-bundles}
+      HOST_REPO_ROOT: ${PWD}
+      DOCKER_HOST: unix:///var/run/docker.sock
+      GATEWAY_EVENT_URL: http://gateway:8080/events
+      MODEL_GATEWAY_API_KEY: ${MODEL_GATEWAY_API_KEY:-localdev-key}
+    volumes:
+      - ../key.txt:/run/secrets/age_identity:ro
+      - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
+      - ${HOST_WORKFLOW_REPO_PATH:-../examples/workflow-repo/workflows}:/app/workflows:ro
+      - ${RUNTIME_BUNDLE_ROOT:-/tmp/agentic-ops-runtime-bundles}:${RUNTIME_BUNDLE_ROOT:-/tmp/agentic-ops-runtime-bundles}
+      - ../shared:/app/shared:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    networks:
+      - ai-ops-network
+
+  control-plane-ui:
+    build:
+      context: ../control-plane-ui
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8080
+    ports:
+      - "3000:3000"
+    depends_on:
+      - gateway
+    networks:
+      - ai-ops-network
+
+  # ─── Core MCP Servers (required for every instance) ────────────────
+
+  mcp-message:
+    build:
+      context: ..
+      dockerfile: mcps/Dockerfile
+    command: ["python", "-m", "uvicorn", "mcps.core.mcp_message:app", "--host", "0.0.0.0", "--port", "8100"]
+    restart: unless-stopped
+    environment:
+      GATEWAY_URL: http://gateway:8080
+      AGE_IDENTITY: file:/run/secrets/age_identity
+      PLATFORM_CONFIG_FILE: ${PLATFORM_CONFIG_FILE:-/app/platform-config.yaml}
+    volumes:
+      - ../key.txt:/run/secrets/age_identity:ro
+    ports:
+      - "8100:8100"
+    networks:
+      - ai-ops-network
+
+  mcp-memory:
+    build:
+      context: ..
+      dockerfile: mcps/Dockerfile
+    command: ["python", "-m", "uvicorn", "mcps.core.mcp_memory:app", "--host", "0.0.0.0", "--port", "8103"]
+    restart: unless-stopped
+    environment:
+      HINDSIGHT_URL: http://hindsight:8888
+      AGE_IDENTITY: file:/run/secrets/age_identity
+      PLATFORM_CONFIG_FILE: ${PLATFORM_CONFIG_FILE:-/app/platform-config.yaml}
+    volumes:
+      - ../key.txt:/run/secrets/age_identity:ro
+    depends_on:
+      - hindsight
+    ports:
+      - "8103:8103"
+    networks:
+      - ai-ops-network
+
+  mcp-platform:
+    build:
+      context: ..
+      dockerfile: mcps/Dockerfile
+    command: ["python", "-m", "uvicorn", "mcps.core.mcp_platform:app", "--host", "0.0.0.0", "--port", "8105"]
+    restart: unless-stopped
+    environment:
+      GATEWAY_URL: http://gateway:8080
+      AGE_IDENTITY: file:/run/secrets/age_identity
+      PLATFORM_CONFIG_FILE: ${PLATFORM_CONFIG_FILE:-/app/platform-config.yaml}
+    volumes:
+      - ../key.txt:/run/secrets/age_identity:ro
+    depends_on:
+      - gateway
+    ports:
+      - "8105:8105"
+    networks:
+      - ai-ops-network
+
+  # ─── Integration MCP Servers (optional, per-workflow) ───────────────
+
+  mcp-salesforce:
+    build:
+      context: ..
+      dockerfile: mcps/Dockerfile
+    command: ["python", "-m", "uvicorn", "mcps.integrations.mcp_salesforce:app", "--host", "0.0.0.0", "--port", "8102"]
+    profiles: ["salesforce", "mcps"]
+    restart: unless-stopped
+    environment:
+      AGE_IDENTITY: file:/run/secrets/age_identity
+      PLATFORM_CONFIG_FILE: ${PLATFORM_CONFIG_FILE:-/app/platform-config.yaml}
+    volumes:
+      - ../key.txt:/run/secrets/age_identity:ro
+    ports:
+      - "8102:8102"
+    networks:
+      - ai-ops-network
+
+  mcp-splunk:
+    build:
+      context: ..
+      dockerfile: mcps/Dockerfile
+    command: ["python", "-m", "uvicorn", "mcps.integrations.mcp_splunk:app", "--host", "0.0.0.0", "--port", "8101"]
+    profiles: ["splunk", "incident", "mcps"]
+    restart: unless-stopped
+    ports:
+      - "8101:8101"
+    networks:
+      - ai-ops-network
+
+  mcp-cloudwatch:
+    build:
+      context: ..
+      dockerfile: mcps/Dockerfile
+    command: ["python", "-m", "uvicorn", "mcps.integrations.mcp_cloudwatch:app", "--host", "0.0.0.0", "--port", "8104"]
+    profiles: ["cloudwatch", "incident", "mcps"]
+    restart: unless-stopped
+    ports:
+      - "8104:8104"
+    networks:
+      - ai-ops-network
+
+  mcp-jira:
+    build:
+      context: ..
+      dockerfile: mcps/Dockerfile
+    command: ["python", "-m", "uvicorn", "mcps.integrations.mcp_jira:app", "--host", "0.0.0.0", "--port", "8106"]
+    profiles: ["jira", "mcps"]
+    restart: unless-stopped
+    environment:
+      AGE_IDENTITY: file:/run/secrets/age_identity
+      PLATFORM_CONFIG_FILE: ${PLATFORM_CONFIG_FILE:-/app/platform-config.yaml}
+    volumes:
+      - ../key.txt:/run/secrets/age_identity:ro
+    ports:
+      - "8106:8106"
+    networks:
+      - ai-ops-network
+
+  # ─── Source Connectors ─────────────────────────────────────────────
+
+  servicenow-connector:
+    build:
+      context: ..
+      dockerfile: connectors/servicenow-connector/Dockerfile
+    profiles: ["servicenow", "connectors"]
+    restart: unless-stopped
+    environment:
+      AGE_IDENTITY: file:/run/secrets/age_identity
+      PLATFORM_CONFIG_FILE: ${PLATFORM_CONFIG_FILE:-/app/platform-config.yaml}
+      CONNECTOR_INSTANCE_ID: ${SERVICENOW_CONNECTOR_INSTANCE_ID:-}
+    volumes:
+      - ../key.txt:/run/secrets/age_identity:ro
+      - ../shared:/app/shared:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ai-ops-network
+
+  gcp-pubsub-connector:
+    build:
+      context: ..
+      dockerfile: connectors/gcp-pubsub-connector/Dockerfile
+    profiles: ["gcp-pubsub", "connectors"]
+    restart: unless-stopped
+    environment:
+      AGE_IDENTITY: file:/run/secrets/age_identity
+      PLATFORM_CONFIG_FILE: ${PLATFORM_CONFIG_FILE:-/app/platform-config.yaml}
+      CONNECTOR_INSTANCE_ID: ${GCP_PUBSUB_CONNECTOR_INSTANCE_ID:-}
+    volumes:
+      - ../key.txt:/run/secrets/age_identity:ro
+      - ../shared:/app/shared:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ai-ops-network
+
+volumes:
+  pgdata:
+  minio-data:
+  hindsight-data:
+  agent-memory-documentation:
+  agent-memory-incident-investigator:
+
+networks:
+  ai-ops-network:
+    name: ai-ops-network
+    driver: bridge

@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "agent": "{MAIN_AGENT}",
+  "permissions": {
+    "ask": [
+      "mcp__jira__*"
+    ],
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(sudo *)",
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./secrets/**)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "autoAllowBashIfSandboxed": true,
+    "allowUnsandboxedCommands": false,
+    "filesystem": {
+      "allowWrite": [
+        ".",
+        "/tmp"
+      ],
+      "denyRead": [
+        "./.env",
+        "./.env.*",
+        "./secrets/**"
+      ]
+    },
+    "network": {
+      "allowedDomains": [
+        "mcp-message",
+        "mcp-memory",
+        "mcp-platform",
+        "mcp-custom-example"
+      ]
+    },
+    "credentials": {
+      "envVars": [
+        {
+          "name": "EXAMPLE_EXTRA_SECRET",
+          "mode": "deny"
+        }
+      ]
+    }
+  }
+}

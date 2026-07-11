@@ -1,0 +1,15 @@
+model_list:
+  - model_name: example-openai-compatible
+    litellm_params:
+      model: openai/example-model
+      api_key: os.environ/MODEL_GATEWAY_API_KEY
+
+  - model_name: example-gemini-compatible
+    litellm_params:
+      model: gemini/example-model
+      api_key: os.environ/MODEL_GATEWAY_API_KEY
+
+litellm_settings:
+  drop_params: true
+  num_retries: 2
+  request_timeout: 120

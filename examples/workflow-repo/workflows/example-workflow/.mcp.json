@@ -1,0 +1,43 @@
+{
+  "mcpServers": {
+    "message": {
+      "type": "http",
+      "url": "http://mcp-message:8100/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MESSAGE_BUS_BOT_TOKEN}",
+        "X-Task-Id": "${TASK_ID}",
+        "X-Task-Workflow": "${TASK_WORKFLOW}",
+        "X-Gateway-Url": "${GATEWAY_URL}",
+        "X-Gateway-Event-Url": "${GATEWAY_EVENT_URL}",
+        "X-Message-Channel": "${MESSAGE_CHANNEL}",
+        "X-Message-Channel-Id": "${MESSAGE_CHANNEL_ID}",
+        "X-Message-Thread-Id": "${MESSAGE_THREAD_ID}"
+      }
+    },
+    "memory": {
+      "type": "http",
+      "url": "http://mcp-memory:8103/mcp",
+      "headers": {
+        "X-Task-Workflow": "${TASK_WORKFLOW}"
+      }
+    },
+    "platform": {
+      "type": "http",
+      "url": "http://mcp-platform:8105/mcp",
+      "headers": {
+        "X-Message-Channel": "${MESSAGE_CHANNEL}",
+        "X-Message-Channel-Id": "${MESSAGE_CHANNEL_ID}",
+        "X-Message-Thread-Id": "${MESSAGE_THREAD_ID}"
+      }
+    },
+    "custom-example": {
+      "type": "http",
+      "url": "http://mcp-custom-example:8110/mcp",
+      "headers": {
+        "Authorization": "Bearer ${CUSTOM_EXAMPLE_TOKEN}",
+        "X-Custom-Example-Base-Url": "${CUSTOM_EXAMPLE_BASE_URL}"
+      }
+    }
+  }
+}
+

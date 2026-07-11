@@ -1,0 +1,92 @@
+nameOverride: ""
+fullnameOverride: ""
+
+imagePullPolicy: IfNotPresent
+
+platformConfig:
+  # One of existingSecret or existingConfigMap should provide platform-config.yaml.
+  existingSecret: ""
+  existingConfigMap: ""
+
+workflowRepo:
+  mountPath: /app/workflow-repos/default
+  workflowRoot: ""
+  workflowRepoPaths: /app/workflow-repos/default
+  existingClaim: ""
+
+runtimeBundles:
+  root: ""
+  uriTemplate: ""
+
+images:
+  gateway:
+    repository: agentic-ops-gateway
+    tag: latest
+  sessionManager:
+    repository: agentic-ops-session-manager
+    tag: latest
+  controlPlaneUi:
+    repository: agentic-ops-control-plane-ui
+    tag: latest
+  mcp:
+    repository: agentic-ops-mcps
+    tag: latest
+  connector:
+    repository: agentic-ops-gateway
+    tag: latest
+
+gateway:
+  replicas: 1
+  port: 8080
+
+sessionManager:
+  replicas: 1
+  env:
+    RUNTIME_LAUNCHER: kubernetes
+
+controlPlaneUi:
+  replicas: 1
+  port: 3000
+  env:
+    NEXT_PUBLIC_API_URL: http://agentic-ops-gateway:8080
+
+mcps:
+  message:
+    enabled: true
+    module: mcps.core.mcp_message
+    port: 8100
+  memory:
+    enabled: true
+    module: mcps.core.mcp_memory
+    port: 8103
+  platform:
+    enabled: true
+    module: mcps.core.mcp_platform
+    port: 8105
+  salesforce:
+    enabled: false
+    module: mcps.integrations.mcp_salesforce
+    port: 8102
+  splunk:
+    enabled: false
+    module: mcps.integrations.mcp_splunk
+    port: 8101
+  cloudwatch:
+    enabled: false
+    module: mcps.integrations.mcp_cloudwatch
+    port: 8104
+  jira:
+    enabled: false
+    module: mcps.integrations.mcp_jira
+    port: 8106
+
+connectors:
+  servicenow:
+    enabled: false
+    command:
+      - python
+      - /app/connectors/servicenow-connector/main.py
+
+serviceAccount:
+  create: true
+  name: ""

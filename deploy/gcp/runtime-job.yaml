@@ -1,0 +1,30 @@
+apiVersion: run.googleapis.com/v1
+kind: Job
+metadata:
+  name: agentic-ops-runtime
+  labels:
+    app.kubernetes.io/name: agentic-ops
+    app.kubernetes.io/component: runtime
+spec:
+  template:
+    spec:
+      template:
+        spec:
+          serviceAccountName: "${RUNTIME_SERVICE_ACCOUNT}"
+          maxRetries: 0
+          timeoutSeconds: 3600
+          containers:
+            - image: "${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/runtime:${IMAGE_TAG}"
+              env:
+                - name: TASK_ID
+                  value: "${TASK_ID}"
+                - name: WORKFLOW
+                  value: "${WORKFLOW}"
+                - name: WORKFLOW_BUNDLE_URI
+                  value: "${WORKFLOW_BUNDLE_URI}"
+                - name: WORKFLOW_BUNDLE_CHECKSUM
+                  value: "${WORKFLOW_BUNDLE_CHECKSUM}"
+                - name: GATEWAY_EVENT_URL
+                  value: "${GATEWAY_EVENT_URL}"
+                - name: MESSAGE_BUS_PROVIDER
+                  value: "${MESSAGE_BUS_PROVIDER}"

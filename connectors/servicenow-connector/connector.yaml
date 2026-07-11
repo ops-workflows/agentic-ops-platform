@@ -1,0 +1,60 @@
+# ServiceNow Connector — polls for new incidents and creates investigation tasks
+name: servicenow-connector
+description: ServiceNow incident polling connector
+
+metadata:
+  display_name: ServiceNow Incident Intake
+  summary: Polls priority incidents from ServiceNow and opens investigation tasks for the customer incident workflow.
+  source_label: ServiceNow incident queue
+  tags:
+    - Incident intake
+    - ServiceNow
+    - Polling
+
+source:
+  type: polling
+  interval_sec: 60
+  instance_url: ${SERVICENOW_INSTANCE_URL}
+  table: incident
+  query: "state=1^priority<=3^sys_created_on>=javascript:gs.minutesAgoStart(5)"
+  fields:
+    - number
+    - short_description
+    - description
+    - priority
+    - severity
+    - state
+    - category
+    - subcategory
+    - assignment_group
+    - assigned_to
+    - caller_id
+    - opened_at
+    - sys_id
+    - cmdb_ci
+    - u_subscription_id
+    - u_order_id
+    - u_customer_id
+    - u_error_code
+
+target:
+  workflow: incident-investigator
+  message_channel: customer-incidents
+
+parsing:
+  format: json
+  extract:
+    incident_id: "number"
+    severity: "priority"
+    service: "cmdb_ci.display_value"
+    customer: "caller_id.display_value"
+    description: "description"
+    subscription_id: "u_subscription_id"
+    order_id: "u_order_id"
+    customer_id: "u_customer_id"
+    error_code: "u_error_code"
+
+coalescing:
+  enabled: true
+  window_sec: 300
+  key_field: incident_id

@@ -1,0 +1,44 @@
+name: platform-test
+description: Synthetic plugin fixture for the platform regression suite. Intentionally not tied to any business workflow.
+version: 0.0.1
+
+session:
+  max_turns: 8
+  model: test
+
+env:
+  TEST_FIXED_VAR: "test-fixed-value"
+
+secrets:
+  TEST_SECRET_VAR:
+    encrypted: "ENC[plain,test-secret-value]"
+    description: "Fake secret used to prove header expansion."
+
+# Sandbox credential deny-list is seeded in settings.json and auto-populated
+# by the runtime from the secrets above + platform secrets.
+
+runtime:
+  parallel_workers: 1
+  heartbeat_interval_sec: 15
+  lost_task_timeout_sec: 60
+  runtime_timeout_sec: 120
+  ask_user_question_reminder:
+    enabled: true
+    min_turns: 5
+    turn_budget_ratio: 0.5
+    time_budget_ratio: 0.5
+    recent_question_turn_window: 3
+  alert_coalesce_window_sec: 60
+  container_image: ai-ops-agent-runtime:latest
+  memory_volumes:
+    - agent-memory-platform-test:/workspace/.claude/agent-memory
+
+schedules:
+  - name: test-daily
+    cron: "0 9 * * *"
+    message_channel: platform-test-channel
+    prompt: "run the synthetic daily test workflow"
+
+messaging:
+  channels:
+    - platform-test-channel

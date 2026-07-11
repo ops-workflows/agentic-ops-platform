@@ -1,0 +1,23 @@
+{{- if and (not .Values.platformConfig.existingSecret) (not .Values.platformConfig.existingConfigMap) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agentic-ops.fullname" . }}-platform-config
+data:
+  platform-config.yaml: |
+    config: {}
+    mcps:
+      enabled:
+        - message
+        - memory
+        - platform
+    connectors:
+      enabled: []
+    message_bus:
+      provider: mattermost
+    memory:
+      backend: hindsight
+      banks:
+        business: {}
+        learning: {}
+{{- end }}

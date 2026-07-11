@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentic-ops.fullname" . }}-control-plane-ui
+  labels:
+    app.kubernetes.io/component: control-plane-ui
+spec:
+  replicas: {{ .Values.controlPlaneUi.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: control-plane-ui
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: control-plane-ui
+    spec:
+      containers:
+        - name: control-plane-ui
+          image: {{ .Values.images.controlPlaneUi.repository }}:{{ .Values.images.controlPlaneUi.tag }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.controlPlaneUi.port }}
+          env:
+            - name: NEXT_PUBLIC_API_URL
+              value: {{ .Values.controlPlaneUi.env.NEXT_PUBLIC_API_URL | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentic-ops.fullname" . }}-control-plane-ui
+spec:
+  selector:
+    app.kubernetes.io/component: control-plane-ui
+  ports:
+    - name: http
+      port: {{ .Values.controlPlaneUi.port }}
+      targetPort: http

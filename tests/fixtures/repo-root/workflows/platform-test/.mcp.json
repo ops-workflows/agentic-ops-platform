@@ -1,0 +1,47 @@
+{
+  "mcpServers": {
+    "testserver": {
+      "type": "http",
+      "url": "http://${FAKE_MCP_HOST}:${FAKE_MCP_PORT}/mcp",
+      "headers": {
+        "X-Task-Id": "${TASK_ID}",
+        "X-Task-Workflow": "${TASK_WORKFLOW}",
+        "X-Message-Channel": "${MESSAGE_CHANNEL}",
+        "X-Message-Thread-Id": "${MESSAGE_THREAD_ID}",
+        "X-Test-Fixed": "${TEST_FIXED_VAR}",
+        "X-Test-Secret": "${TEST_SECRET_VAR}"
+      }
+    },
+    "message": {
+      "type": "http",
+      "url": "http://${FAKE_MCP_HOST}:${FAKE_MCP_PORT}/mcp",
+      "headers": {
+        "X-Task-Id": "${TASK_ID}",
+        "X-Task-Workflow": "${TASK_WORKFLOW}",
+        "X-Gateway-Url": "${GATEWAY_URL}",
+        "X-Gateway-Event-Url": "${GATEWAY_EVENT_URL}",
+        "X-Message-Api-Url": "${TEST_HOST_MESSAGE_API_URL}",
+        "X-Message-Channel": "${MESSAGE_CHANNEL}",
+        "X-Message-Channel-Id": "${MESSAGE_CHANNEL_ID}",
+        "X-Message-Thread-Id": "${MESSAGE_THREAD_ID}"
+      }
+    },
+    "platform": {
+      "type": "http",
+      "url": "http://${FAKE_MCP_HOST}:${FAKE_MCP_PORT}/mcp",
+      "headers": {
+        "X-Message-Channel": "${MESSAGE_CHANNEL}",
+        "X-Message-Channel-Id": "${MESSAGE_CHANNEL_ID}",
+        "X-Message-Thread-Id": "${MESSAGE_THREAD_ID}"
+      }
+    },
+    "hindsight": {
+      "type": "http",
+      "url": "http://${FAKE_MCP_HOST}:${FAKE_MCP_PORT}/mcp",
+      "headers": {
+        "X-Hindsight-Url": "${TEST_HOST_HINDSIGHT_URL}",
+        "X-Task-Workflow": "${TASK_WORKFLOW}"
+      }
+    }
+  }
+}

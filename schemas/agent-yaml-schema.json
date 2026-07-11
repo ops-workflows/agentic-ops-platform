@@ -1,0 +1,201 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Agentic Ops Agent YAML Schema",
+  "description": "Platform-level config for Agentic Ops workflows. Claude Code files (.mcp.json, settings.json, agents/*.md, skills/, hooks/hooks.json) are authored directly — not generated from this file.",
+  "type": "object",
+  "required": ["name", "description"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Unique workflow identifier (kebab-case)",
+      "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$"
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable description of what this workflow does"
+    },
+    "version": {
+      "type": "string",
+      "description": "Semantic version of the workflow config",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "session": {
+      "type": "object",
+      "description": "Session-level settings passed to Claude Code SDK at invocation time",
+      "properties": {
+        "max_turns": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "default": 50,
+          "description": "Maximum conversation turns before forced stop"
+        },
+        "model": {
+          "type": "string",
+          "description": "Model override (defaults to LM Studio configured model)"
+        }
+      }
+    },
+    "env": {
+      "type": "object",
+      "description": "Non-secret environment variables injected into the runtime container for ${VAR} expansion in .mcp.json headers.",
+      "additionalProperties": {
+        "type": ["string", "number", "integer", "boolean"]
+      }
+    },
+    "secrets": {
+      "type": "object",
+      "description": "Encrypted credentials (Pulumi-style). Keys become container env vars available for ${VAR} expansion in .mcp.json headers.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["encrypted"],
+        "properties": {
+          "encrypted": {
+            "type": "string",
+            "description": "Encrypted value in ENC[backend,data] format",
+            "pattern": "^ENC\\[\\w[\\w-]*,.+\\]$"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of this secret"
+          }
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "description": "Platform-level runtime config (not passed to Claude Code)",
+      "properties": {
+        "parallel_workers": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "default": 3,
+          "description": "Max concurrent agent sessions for this workflow"
+        },
+        "heartbeat_interval_sec": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 120,
+          "default": 30
+        },
+        "lost_task_timeout_sec": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 3600,
+          "default": 300,
+          "description": "Heartbeat-loss timeout. If no heartbeat arrives within this window, the session is marked lost."
+        },
+        "runtime_timeout_sec": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 7200,
+          "default": 300,
+          "description": "Wall-clock runtime ceiling for a session attempt. Prevents long-running misdirected sessions from burning tokens indefinitely."
+        },
+        "ask_user_question_reminder": {
+          "type": "object",
+          "description": "Late-session reminder policy for prompting the agent to use AskUserQuestion when it may be stuck.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Enable a one-shot non-blocking reminder during long or nearly exhausted sessions."
+            },
+            "min_turns": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 10,
+              "description": "Do not send the reminder before this many observed turns."
+            },
+            "turn_budget_ratio": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0.7,
+              "description": "Trigger once the session crosses this fraction of max_turns."
+            },
+            "time_budget_ratio": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0.75,
+              "description": "Trigger once the session crosses this fraction of runtime_timeout_sec."
+            },
+            "recent_question_turn_window": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 200,
+              "default": 8,
+              "description": "Suppress the reminder if AskUserQuestion was already used within this many recent turns."
+            }
+          },
+          "additionalProperties": false
+        },
+        "alert_coalesce_window_sec": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 600,
+          "default": 300,
+          "description": "Window to coalesce duplicate alerts (0 = disabled)"
+        },
+        "container_image": {
+          "type": "string",
+          "description": "Override the default runtime image"
+        },
+        "memory_volumes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Named Docker volumes for persistent agent memory"
+        }
+      }
+    },
+    "schedules": {
+      "type": "array",
+      "description": "Cron-triggered tasks",
+      "items": {
+        "type": "object",
+        "required": ["name", "cron", "prompt"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Schedule identifier"
+          },
+          "cron": {
+            "type": "string",
+            "description": "Cron expression (5-field)",
+            "pattern": "^[\\d*,/-]+ [\\d*,/-]+ [\\d*,/-]+ [\\d*,/-]+ [\\d*,/-]+$"
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Task prompt to inject when the schedule fires"
+          },
+          "message_channel": {
+            "type": "string",
+            "description": "Optional message channel for the scheduled task's final completion post"
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      }
+    },
+    "messaging": {
+      "type": "object",
+      "description": "Messaging integration config (platform-level routing, not Claude Code)",
+      "properties": {
+        "channels": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Channels this workflow listens on"
+        },
+        "trigger_pattern": {
+          "type": "string",
+          "description": "Message pattern that triggers this workflow (e.g., '@agent')"
+        }
+      }
+    }
+  }
+}

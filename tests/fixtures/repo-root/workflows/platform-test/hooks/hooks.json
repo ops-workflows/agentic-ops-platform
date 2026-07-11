@@ -1,0 +1,48 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./hooks/auto_recall_hook.py",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "./hooks/test_prompt_hook.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./hooks/test_pretool_hook.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "helper",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./hooks/retain_incident_hook.py",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "./hooks/test_subagent_stop_hook.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

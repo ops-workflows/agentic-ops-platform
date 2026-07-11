@@ -1,0 +1,106 @@
+# Agentic Ops platform configuration example.
+# Copy to platform-config.yaml for local development, or provide equivalent
+# values through your deployment secret/config system.
+#
+# Edit the plain `config:` values directly for local development.
+# Keep sensitive values in `secrets:` encrypted with age.
+#
+# Only `AGE_IDENTITY` must come from outside the repo so services can decrypt
+# the encrypted values below. `AGE_PUBLIC_KEY` can live here because the gateway
+# only needs the public key to encrypt newly entered secrets.
+
+config:
+  INSTANCE_NAME: local-agentic-ops
+
+  AGE_PUBLIC_KEY: age1examplepublickeyreplacewithyourgeneratedrecipient
+
+  PG_HOST: postgres
+  PG_PORT: "5432"
+  PG_DB: agentic_ops
+  PG_USER: agentic_ops
+  PG_PASSWORD: localdev-postgres-password
+
+  OBJECT_STORE_PROVIDER: s3
+  OBJECT_STORE_ENDPOINT: minio:9000
+  OBJECT_STORE_ACCESS_KEY: agentic_ops
+  OBJECT_STORE_SECRET_KEY: localdev-minio-password
+
+  CONTROL_PLANE_UI_URL: http://localhost:3000
+  GATEWAY_PUBLIC_BASE_URL: http://localhost:8080
+
+mcps:
+  enabled:
+    - message
+    - memory
+    - platform
+  # Instance-specific MCP policy lives under `config.<server_id>`, e.g.:
+  # config:
+  #   salesforce:
+  #     api_version: v60.0
+  #     allowed_objects: [Account, Case, Contact]
+
+connectors:
+  # `enabled` lists connector instance ids defined under `instances`.
+  enabled: []
+  instances: {}
+  # instances:
+  #   example-intake:
+  #     type: gcp-pubsub
+  #     source:
+  #       type: pubsub
+  #       project: ${GCP_PROJECT}
+  #       subscription: ${GCP_PUBSUB_SUBSCRIPTION}
+  #     target:
+  #       workflow: example-workflow
+  #       message_channel: ops-alerts
+
+message_bus:
+  # Supported providers: mattermost, slack.
+  provider: mattermost
+
+runtime_bundles:
+  storage: s3
+  bucket: agentic-ops-bundles
+  retention_versions: 20
+
+# These env vars are injected into every ephemeral agent runtime container.
+# Use `null` to explicitly remove a built-in runtime env var.
+# Keep workflow-independent flags here. Model-specific values can live under
+# model_profiles and be selected from a workflow's session.model.
+runtime_env:
+  ANTHROPIC_API_KEY: null
+  DISABLE_TELEMETRY: true
+  DISABLE_ERROR_REPORTING: true
+  DISABLE_FEEDBACK_COMMAND: true
+  CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: true
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: true
+
+# If a workflow omits session.model, this profile is used automatically.
+default_model_profile: example
+
+# Workflows can set session.model to a profile name such as `local` or
+# `gemini`. If no matching profile exists, the value is treated as a direct
+# model name and applied to ANTHROPIC_MODEL plus the Claude Code defaults.
+# String values of the form `${ENV_VAR}` are resolved from the service process
+# environment at load time, which is useful for local provider API keys.
+model_profiles:
+  example:
+    ANTHROPIC_BASE_URL: http://model-gateway:1235
+    ANTHROPIC_AUTH_TOKEN: ${MODEL_GATEWAY_API_KEY}
+    ANTHROPIC_MODEL: example-model
+    ANTHROPIC_DEFAULT_OPUS_MODEL: example-model
+    ANTHROPIC_DEFAULT_SONNET_MODEL: example-model
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: example-model
+    CLAUDE_CODE_SUBAGENT_MODEL: example-model
+
+memory:
+  backend: hindsight
+  banks:
+    business: {}
+    learning: {}
+
+secrets:
+  MESSAGE_BUS_BOT_TOKEN:
+    encrypted: ENC[age,replace-with-encrypted-token]
+  MESSAGE_OUTGOING_WEBHOOK_SECRET:
+    encrypted: ENC[age,replace-with-encrypted-secret]

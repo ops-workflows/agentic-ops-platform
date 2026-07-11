@@ -1,0 +1,52 @@
+# Example workflow-repo deployment override
+#
+# Usage from your workflow repo (as a sibling checkout of agentic-ops-platform):
+#   docker compose -f ../agentic-ops-platform/deploy/docker-compose.yml -f deploy/docker-compose.override.yml up --build
+#
+# An override is only needed to add a *custom* MCP server or connector your
+# workflow repo defines itself (see mcps/custom-mcp-example/ and
+# connectors/custom-connector-example/ in this example repo) — every MCP
+# server and connector the public platform already ships (salesforce, splunk,
+# cloudwatch, jira, gcp-pubsub, servicenow, ...) is reachable directly from the
+# base `deploy/docker-compose.yml` via `COMPOSE_PROFILES` and plain env vars,
+# with no override required. See deploy/README.md in this example.
+#
+# Defaults assume your repo and agentic-ops-platform are sibling directories.
+# Set AGENTIC_OPS_PLATFORM_ROOT and WORKFLOW_REPO_ROOT to absolute paths
+# when they are not.
+
+services:
+  # Example: building your own custom MCP server from mcps/custom-mcp-example/
+  # in this example repo. Remove or adapt once you've written your own.
+  mcp-custom-example:
+    build:
+      context: ${WORKFLOW_REPO_ROOT:-../../my-workflow-repo}
+      dockerfile: mcps/custom-mcp-example/Dockerfile
+    command: ["python", "-m", "uvicorn", "mcp_custom_example:app", "--host", "0.0.0.0", "--port", "8110"]
+    profiles: ["custom-example"]
+    restart: unless-stopped
+    environment:
+      PLATFORM_CONFIG_FILE: /app/platform-config.yaml
+    volumes:
+      - ${WORKFLOW_REPO_ROOT:-../../my-workflow-repo}/platform-config.yaml:/app/platform-config.yaml:ro
+    ports:
+      - "8110:8110"
+    networks:
+      - ai-ops-network
+
+  # Example: running your own custom connector from
+  # connectors/custom-connector-example/ in this example repo.
+  custom-connector-example:
+    build:
+      context: ${WORKFLOW_REPO_ROOT:-../../my-workflow-repo}
+      dockerfile: connectors/custom-connector-example/Dockerfile
+    profiles: ["custom-example"]
+    restart: unless-stopped
+    environment:
+      PLATFORM_CONFIG_FILE: /app/platform-config.yaml
+      CONNECTOR_INSTANCE_ID: my-connector-instance
+    volumes:
+      - ${WORKFLOW_REPO_ROOT:-../../my-workflow-repo}/platform-config.yaml:/app/platform-config.yaml:ro
+    networks:
+      - ai-ops-network
+

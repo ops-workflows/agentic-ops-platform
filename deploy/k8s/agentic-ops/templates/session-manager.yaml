@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentic-ops.fullname" . }}-session-manager
+  labels:
+    app.kubernetes.io/component: session-manager
+spec:
+  replicas: {{ .Values.sessionManager.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: session-manager
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: session-manager
+    spec:
+      serviceAccountName: {{ include "agentic-ops.serviceAccountName" . }}
+      containers:
+        - name: session-manager
+          image: {{ .Values.images.sessionManager.repository }}:{{ .Values.images.sessionManager.tag }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          env:
+            {{- include "agentic-ops.commonEnv" . | nindent 12 }}
+            - name: RUNTIME_LAUNCHER
+              value: {{ .Values.sessionManager.env.RUNTIME_LAUNCHER | quote }}
+            - name: RUNTIME_BUNDLE_URI_TEMPLATE
+              value: {{ .Values.runtimeBundles.uriTemplate | quote }}
+            - name: RUNTIME_BUNDLE_ROOT
+              value: {{ .Values.runtimeBundles.root | quote }}
+          volumeMounts:
+            {{- include "agentic-ops.commonVolumeMounts" . | nindent 12 }}
+      volumes:
+        {{- include "agentic-ops.commonVolumes" . | nindent 8 }}

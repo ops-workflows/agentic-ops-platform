@@ -1,0 +1,182 @@
+# Deployment
+
+## Bootstrap (`make bootstrap`)
+
+`make bootstrap` runs `scripts/bootstrap.py`, a guided prompt that produces
+the **layer 1** bootstrap artifact described in
+[Configuration](configuration.md) — it never reads or writes the workflow
+repo's `platform-config.yaml`.
+
+Prompts (each has a `--flag` and an env var override, so the same script runs
+non-interactively in CI):
+
+1. **Deployment target** — `compose`, `kubernetes`, or `gcp` (`--target` /
+   `BOOTSTRAP_TARGET`).
+2. **Workflow source** — `remote` (git URL + ref + optional PAT) or `local`
+   (a filesystem checkout path) (`--source` / `BOOTSTRAP_SOURCE`). `compose`
+   only supports `local` today (it bind-mounts a checkout); `kubernetes` and
+   `gcp` expect `remote`.
+3. **Repo URL/ref/PAT** (remote) or **local checkout path** (local).
+4. **AGE identity** (`--age-identity` / `AGE_IDENTITY`) — an armored
+   `AGE-SECRET-KEY-...` string or a path to a key file (normalized to
+   `file:<path>`).
+5. **Model gateway API key** (`--model-gateway-api-key` /
+   `MODEL_GATEWAY_API_KEY`).
+
+Generated artifact per target (none of these are committed):
+
+| Target | Artifact | Apply |
+| --- | --- | --- |
+| `compose` | `compose.env` | `docker compose -f deploy/docker-compose.yml --env-file compose.env up -d` |
+| `kubernetes` | `dist/bootstrap/k8s-secret.sh` | run the script to create/update a `Secret` |
+| `gcp` | `dist/bootstrap/gcp-secrets.sh` | run the script to create/update Secret Manager entries |
+
+Non-interactive example:
+
+```sh
+python scripts/bootstrap.py --non-interactive \
+  --target kubernetes --source remote \
+  --repo-url https://github.com/org/workflow-repo --repo-ref v1.2.0 \
+  --age-identity "$(cat age-key.txt)" \
+  --model-gateway-api-key "$ANTHROPIC_API_KEY"
+```
+
+## Which services actually start
+
+Compose gates every optional MCP server and connector behind a profile (see
+`deploy/docker-compose.yml`'s `profiles:` entries); nothing reads
+`platform-config.yaml` to decide this automatically for you. `make up`
+starts the base stack with whatever `COMPOSE_PROFILES` you already have
+exported (or none). `make up-auto` derives the right value for you instead —
+`scripts/compose_profiles.py` reads the instance's `platform-config.yaml`
+(`$PLATFORM_CONFIG_FILE`/`$HOST_PLATFORM_CONFIG_FILE`, or the bundled example)
+and maps its `mcps.enabled`, `connectors.enabled` (by connector `type`), and
+`model_profiles` (by `ANTHROPIC_BASE_URL`) to the matching profile names:
+
+```sh
+make up-auto
+# Computed COMPOSE_PROFILES=gcp-pubsub,model-gateway,salesforce
+```
+
+Kubernetes (Helm) and Cloud Run do **not** have an equivalent automatic
+derivation today:
+
+- The Helm chart's `mcps.<id>.enabled` / `connectors.<id>.enabled` booleans in
+  `values.yaml` directly gate which templates render — but the chart never
+  reads `platform-config.yaml` itself, so these booleans have to be kept in
+  sync with it by hand.
+- The Cloud Run templates under `deploy/gcp/` are rendered one service at a
+  time via explicit `envsubst` commands (see `deploy/gcp/README.md`); there is
+  no manifest or script that renders "everything this instance's config
+  enables" in one step.
+
+## Local development (uncommitted working tree)
+
+Use `--source local` so `WORKFLOW_REPO_PATHS` (or, for compose,
+`HOST_WORKFLOW_REPO_PATH`/`HOST_PLATFORM_CONFIG_FILE`) points at a plain
+filesystem checkout. **Sync now** rebuilds the bundle from whatever is
+currently on disk — no git fetch, no commit, no pinned tag required. Object
+storage is optional in this mode; a local `RUNTIME_BUNDLE_ROOT` works fine.
+
+## `make` targets
+
+| Target | Does |
+| --- | --- |
+| `init` | `uv sync --extra dev`. |
+| `bootstrap` | Run `scripts/bootstrap.py` interactively. |
+| `set-secret` | Interactively encrypt and store a platform or agent secret. |
+| `compose-build` | Build all Compose services. |
+| `runtime-build` | Build the `ai-ops-agent-runtime` image. |
+| `build` | `runtime-build` + `compose-build`. |
+| `up` / `down` | Start/stop the local Compose stack. |
+| `restart` | `down` + `build` + `up`. |
+| `restart-<service>` | Rebuild and recreate one service, e.g. `make restart-postgres`. |
+| `ensure-test-db` | Create the dedicated Postgres test database if missing. |
+| `unit-tests` | `tests/unit` (no infra). |
+| `service-tests` | `tests/service` against real Postgres. |
+| `runtime-tests` | `tests/runtime` against real Postgres + Docker. |
+| `test` | All three suites. |
+| `clean-test-containers` | Remove dangling test session containers. |
+| `format` / `lint` | ruff fix+format / ruff check+format-check. |
+
+## Deployment artifacts (`deploy/`)
+
+- `deploy/docker-compose.yml` — the public base stack (Postgres, MinIO,
+  gateway, session-manager, runtime image, control-plane UI, core MCPs).
+  Mounts `HOST_PLATFORM_CONFIG_FILE` (default
+  `../examples/workflow-repo/platform-config.example.yaml`),
+  `HOST_WORKFLOW_REPO_PATH` (default `../examples/workflow-repo/workflows`),
+  and `RUNTIME_BUNDLE_ROOT`. Optional profiles: `model-gateway`, `local-llm`,
+  `salesforce`, `splunk`, `cloudwatch`, `jira`, `servicenow`, `gcp-pubsub`.
+- `deploy/k8s/agentic-ops` — Kubernetes (Helm) chart; instance values select the
+  platform-config secret/configmap, workflow-repo PVC, bundle URI pattern,
+  and which MCPs/connectors run.
+- `deploy/gcp/` — thin Cloud Run service/job templates; Cloud SQL,
+  Secret Manager, GCS, IAM, and VPC wiring are instance-owned.
+
+Private/customer deployments should add a Compose override (or Helm
+values/Cloud Run env) that sets `WORKFLOW_REPO_PATHS`, points
+`PLATFORM_CONFIG_FILE` at the instance config, and enables the MCPs/connectors
+that instance needs — rather than editing the public base stack.
+
+## Workflow bundles
+
+A **bundle** is the assembled, runnable package for one workflow: `CLAUDE.md`,
+`agent.yaml`, `settings.json`, `.mcp.json`, `agents/`, `skills/`, `hooks/`,
+and a `manifest.yaml`, merged from the platform core, the workflow repo's
+shared assets, and the workflow itself (see
+[Workflow authoring](workflow-authoring.md) for assembly/precedence detail).
+
+Every launcher (Docker, Kubernetes, Cloud Run) consumes the same contract:
+
+| Env var | Meaning |
+| --- | --- |
+| `WORKFLOW_BUNDLE_PATH` | A mounted local bundle directory. |
+| `WORKFLOW_BUNDLE_URI` | `file://`, `s3://`, `gs://`, or a presigned `https://` URL the runtime fetches and extracts. |
+| `WORKFLOW_BUNDLE_CHECKSUM` | `sha256:<hex>` of the bundle's `manifest.yaml`; the runtime refuses to start if this doesn't match. |
+
+Bundles are uniformly object-storage-backed: when
+`RUNTIME_BUNDLE_OBJECT_STORE_BUCKET` is set, session-manager uploads a freshly
+built bundle and generates a short-lived presigned https URL for
+`WORKFLOW_BUNDLE_URI`, so the runtime container needs no cloud SDK — just
+plain https plus the standard library `tarfile`.
+
+## Sync and versioning
+
+Sync — whether the initial bootstrap sync or the UI **Sync now** button — runs
+one pipeline (`shared/lib/workflow_repo_sync.py::sync_workflow_repo`):
+
+1. Fetch the source at the effective ref (pinned ref if set, else the
+   bootstrap `WORKFLOW_REPO_REF`) — or read the current working tree in
+   local-path mode.
+2. Discover `workflows/*/agent.yaml`.
+3. Rebuild every bundle and check `manifest.yaml`'s `platform_version` against
+   the running platform's version (see [Compatibility policy](#compatibility-policy)).
+4. Upload bundles to object storage, if configured.
+5. Persist the result — synced ref/commit, discovered workflows, any bundle
+   errors, sync status/error, timestamp — to the `control_plane.workflow_repo_state`
+   singleton row.
+
+"Update" always means re-syncing to an explicitly pinned ref — never a silent
+pull of `main`. Sync never touches bootstrap secrets (repo URL/PAT,
+`AGE_IDENTITY`, `MODEL_GATEWAY_API_KEY`); changing those means re-running
+`make bootstrap`.
+
+### Compatibility policy
+
+Compatible within a major version: if a bundle's `platform_version` major
+component is newer than the running platform's, that bundle is blocked
+("incompatible"); if older, it's built with a warning; if equal, it's OK.
+
+### Gateway endpoints
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/platform/workflow-repo` | Current state: source, pinned/default ref, last sync result, discovered workflows, bundle errors. |
+| `POST /api/platform/workflow-repo/sync` | Trigger the sync pipeline now ("Sync now"). |
+| `POST /api/platform/workflow-repo/pin` | Set the operator-pinned ref (`{"ref": "..."}`), stored in Postgres and used by the next sync. |
+| `GET /api/platform/workflow-repo/versions` | List released versions to pin from — GitHub-hosted repos only (queries the GitHub tags API with the bootstrap PAT); returns `[]` for other hosts. |
+
+The control-plane UI's workflow-repo page only lets an operator change the
+pinned version and trigger a sync; the repo URL and PAT are bootstrap-owned
+and are never editable from the UI.
