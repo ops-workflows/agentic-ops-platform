@@ -8,6 +8,7 @@ of the platform can stop depending directly on a Docker daemon.
 from __future__ import annotations
 
 import logging
+import sys
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -151,20 +152,24 @@ class DockerRuntimeLauncher:
 
         container_name = spec.container_name or f"session-{spec.task_id[:8]}-{spec.workflow}"
         self._cleanup_stale_container_name(container_name)
-        container = self.client.containers.run(
-            image=spec.image,
-            environment=_environment_with_bundle_contract(spec, mounted_bundle_path=mounted_bundle_path),
-            volumes=volumes,
-            network=DOCKER_NETWORK,
-            detach=True,
-            name=container_name,
-            labels={
+        run_kwargs = {
+            "image": spec.image,
+            "environment": _environment_with_bundle_contract(spec, mounted_bundle_path=mounted_bundle_path),
+            "volumes": volumes,
+            "network": DOCKER_NETWORK,
+            "detach": True,
+            "name": container_name,
+            "labels": {
                 "agentic_ops.task_id": spec.task_id,
                 "agentic_ops.workflow": spec.workflow,
                 "agentic_ops.type": "agent-session",
                 "agentic_ops.runtime_provider": self.provider,
             },
-        )
+        }
+        if sys.platform == "linux":
+            run_kwargs["extra_hosts"] = {"host.docker.internal": "host-gateway"}
+
+        container = self.client.containers.run(**run_kwargs)
         return RuntimeHandle(
             id=container.id,
             short_id=container.short_id,
