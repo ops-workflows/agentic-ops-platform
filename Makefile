@@ -6,7 +6,8 @@ PYTEST_TIMEOUT_FLAGS ?=
 PGUSER ?= agentic_ops
 PGPASSWORD ?= localdev-postgres-password
 TEST_DB_NAME ?= agentic_ops_test
-TEST_DATABASE_URL ?= postgresql+asyncpg://$(PGUSER):$(PGPASSWORD)@localhost:5432/$(TEST_DB_NAME)
+TEST_PG_PORT ?= 55432
+TEST_DATABASE_URL ?= postgresql+asyncpg://$(PGUSER):$(PGPASSWORD)@localhost:$(TEST_PG_PORT)/$(TEST_DB_NAME)
 RUNTIME_IMAGE ?= ai-ops-agent-runtime:latest
 COMPOSE_PROJECT_NAME ?= aiops-test
 COMPOSE_BOOTSTRAP_ENV_FILE ?= compose.env
@@ -14,6 +15,9 @@ WORKFLOW_COMPOSE_ENV_FILE ?= $(shell sed -n 's/^WORKFLOW_COMPOSE_ENV_FILE=//p' "
 HOST_PLATFORM_CONFIG_FILE ?= $(shell sed -n 's/^HOST_PLATFORM_CONFIG_FILE=//p' "$(COMPOSE_BOOTSTRAP_ENV_FILE)" 2>/dev/null | tail -1)
 COMPOSE_ENV_FILES := $(if $(wildcard $(WORKFLOW_COMPOSE_ENV_FILE)),--env-file "$(WORKFLOW_COMPOSE_ENV_FILE)") $(if $(wildcard $(COMPOSE_BOOTSTRAP_ENV_FILE)),--env-file "$(COMPOSE_BOOTSTRAP_ENV_FILE)")
 COMPOSE ?= docker compose $(COMPOSE_ENV_FILES) -f deploy/docker-compose.yml
+# Compose interpolates every service before starting the requested one. The test
+# database only starts Postgres, so provide inert values for runtime-only secrets.
+TEST_COMPOSE ?= AGE_IDENTITY=test-only-not-a-real-age-key LLM_API_KEY=test-only-not-a-real-llm-key PG_PORT=$(TEST_PG_PORT) docker compose --project-name $(COMPOSE_PROJECT_NAME) -f deploy/docker-compose.yml
 
 .PHONY: help unit-tests service-tests runtime-tests test \
 	ensure-test-db up up-auto compose-build runtime-build clean-test-containers \
@@ -58,9 +62,9 @@ restart-%: ## Restart a specific service (e.g. `make restart-postgres` or `make 
 
 
 ensure-test-db: ## Create the dedicated Postgres test database if needed
-	$(COMPOSE) up -d postgres
-	@$(COMPOSE) exec -T postgres psql -U $(PGUSER) -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$(TEST_DB_NAME)'" | grep -q 1 || \
-		$(COMPOSE) exec -T postgres psql -U $(PGUSER) -d postgres -c "CREATE DATABASE $(TEST_DB_NAME)"
+	$(TEST_COMPOSE) up -d --wait postgres
+	@$(TEST_COMPOSE) exec -T postgres psql -U $(PGUSER) -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$(TEST_DB_NAME)'" | grep -q 1 || \
+		$(TEST_COMPOSE) exec -T postgres psql -U $(PGUSER) -d postgres -c "CREATE DATABASE $(TEST_DB_NAME)"
 
 unit-tests: ## Run unit tests (no infra required)
 	$(PYTEST) tests/unit $(PYTEST_FLAGS)

@@ -8,8 +8,8 @@ test server) and assert on the end-to-end session outcome.
 
 ```
 docker build -t ai-ops-agent-runtime:latest -f runtime/Dockerfile .
-docker compose up -d postgres
-export TEST_DATABASE_URL=postgresql+asyncpg://agentic_ops:localdev-postgres-password@localhost:5432/agentic_ops_test
+make ensure-test-db
+export TEST_DATABASE_URL=postgresql+asyncpg://agentic_ops:localdev-postgres-password@localhost:55432/agentic_ops_test
 export TEST_RUNTIME_ENABLED=1
 ```
 

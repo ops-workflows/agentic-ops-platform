@@ -21,7 +21,7 @@ services:
       POSTGRES_USER: ${PG_USER:-agentic_ops}
       POSTGRES_PASSWORD: ${PG_PASSWORD:-localdev-postgres-password}
     ports:
-      - "5432:5432"
+      - "${PG_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s

@@ -88,7 +88,7 @@ The Makefile at the repo root wraps the common commands:
 | `make service-tests`   | Layer 1 — real Postgres |
 | `make runtime-tests`   | Layer 2 — full runtime scenario suite |
 | `make test`            | All three suites |
-| `make ensure-test-db`  | Create the dedicated `agentic_ops_test` DB |
+| `make ensure-test-db`  | Create the dedicated `agentic_ops_test` DB on port `55432` |
 | `make runtime-build`   | Build `ai-ops-agent-runtime:latest` |
 | `make clean-test-containers` | Remove dangling test session containers |
 
