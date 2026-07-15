@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint-and-test:
     name: Lint and full test suite
@@ -28,6 +32,9 @@ jobs:
         with:
           enable-cache: true
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Install dependencies
         run: uv sync --extra dev
 
@@ -35,4 +42,9 @@ jobs:
         run: make lint
 
       - name: Run full test suite
-        run: make test
+        run: make test PYTEST_FLAGS="-vv -ra --durations=25"
+        env:
+          PYTHONUNBUFFERED: "1"
+          RUNTIME_BUILD: >-
+            docker buildx build --load --cache-from=type=gha
+            --cache-to=type=gha,mode=max

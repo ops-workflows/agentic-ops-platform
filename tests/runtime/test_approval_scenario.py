@@ -112,7 +112,7 @@ async def test_approval_approve(
     )
     admit_task = asyncio.create_task(admit_when_resume_pending(task.id, workflow=task.workflow, timeout=120))
 
-    exit_code, logs = await spawn_and_wait(task, timeout_sec=180)
+    exit_code, logs = await spawn_and_wait(task, timeout_sec=60)
     await click_task
     await admit_task
 
@@ -190,7 +190,7 @@ async def test_approval_reject(
     )
     admit_task = asyncio.create_task(admit_when_resume_pending(task.id, workflow=task.workflow, timeout=120))
 
-    exit_code, logs = await spawn_and_wait(task, timeout_sec=180)
+    exit_code, logs = await spawn_and_wait(task, timeout_sec=60)
     await click_task
     await admit_task
 

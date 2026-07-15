@@ -9,6 +9,7 @@ TEST_DB_NAME ?= agentic_ops_test
 TEST_PG_PORT ?= 55432
 TEST_DATABASE_URL ?= postgresql+asyncpg://$(PGUSER):$(PGPASSWORD)@localhost:$(TEST_PG_PORT)/$(TEST_DB_NAME)
 RUNTIME_IMAGE ?= ai-ops-agent-runtime:latest
+RUNTIME_BUILD ?= docker build
 COMPOSE_PROJECT_NAME ?= aiops-test
 COMPOSE_BOOTSTRAP_ENV_FILE ?= compose.env
 WORKFLOW_COMPOSE_ENV_FILE ?= $(shell sed -n 's/^WORKFLOW_COMPOSE_ENV_FILE=//p' "$(COMPOSE_BOOTSTRAP_ENV_FILE)" 2>/dev/null | tail -1)
@@ -39,7 +40,7 @@ compose-build: ## Build all docker compose services
 	$(COMPOSE) build
 
 runtime-build: ## Build the runtime container image
-	docker build -t $(RUNTIME_IMAGE) -f runtime/Dockerfile .
+	$(RUNTIME_BUILD) -t $(RUNTIME_IMAGE) -f runtime/Dockerfile .
 
 build: runtime-build compose-build ## Build all docker images
 
