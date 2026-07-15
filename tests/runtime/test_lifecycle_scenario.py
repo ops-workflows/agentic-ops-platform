@@ -17,10 +17,13 @@ Requires Docker + ``ai-ops-agent-runtime:latest`` + TEST_RUNTIME_ENABLED=1.
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 import pytest
+from session_manager import heartbeat
 from sqlalchemy import select
 
+from shared.lib.models import Task as TaskModel
 from tests.fakes.mock_llm import Turn
 
 pytestmark = pytest.mark.scenario
@@ -73,36 +76,26 @@ async def test_heartbeat_updates_across_turns(
 
 @pytest.mark.asyncio
 async def test_lost_task_detection(
-    require_runtime,
-    mock_llm,
-    fake_mattermost,
-    collected_events,
     create_task,
-    spawn_and_wait,
-    async_engine,
-    _fake_services,
+    db_session,
+    monkeypatch,
 ) -> None:
-    """Kill the container mid-run and verify session-manager bookkeeping
-    handles it (the spawn helper kills on timeout). Use a short
-    runtime_timeout to keep this fast."""
-    # Hang the LLM by scheduling a non-terminating tool_use loop.
-    mock_llm.set_scenario(
-        [
-            Turn(
-                respond=[{"type": "tool_use", "name": "Bash", "input": {"command": "sleep 9999"}}],
-                stop_reason="tool_use",
-            ),
-            Turn(
-                respond=[{"type": "text", "text": "ok"}],
-                stop_reason="end_turn",
-            ),
-        ]
-    )
-    task = await create_task(prompt="Long sleep to test lost-task detection.")
-    # Force a short wait so the spawn helper kills the container.
-    exit_code, logs = await spawn_and_wait(task, timeout_sec=10)
-    # Killed container → exit_code is -99 (timeout) or non-zero.
-    assert exit_code != 0, f"Expected non-zero exit on kill, got {exit_code}"
+    """A stale heartbeat marks a running task lost without a container."""
+    task = await create_task(prompt="Stale heartbeat should mark this task lost.")
+    task_id = task.id
+    task.heartbeat = datetime.now(UTC) - timedelta(seconds=2)
+    db_session.add(task)
+    await db_session.commit()
+
+    monkeypatch.setattr(heartbeat, "_workflow_lost_timeout_sec", lambda _workflow: 1)
+    lost_ids = await heartbeat._lost_task_sweep(db_session)
+
+    assert task_id in lost_ids
+    db_session.expire_all()
+    refreshed = await db_session.get(TaskModel, task_id)
+    assert refreshed is not None
+    assert refreshed.status == "lost"
+    assert refreshed.error == "Heartbeat expired (>1s without update)"
 
 
 # ─── §2.7.3 Manual rerun resets a failed/lost/timed_out task ─────

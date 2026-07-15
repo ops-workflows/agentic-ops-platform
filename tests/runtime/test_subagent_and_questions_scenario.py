@@ -359,6 +359,7 @@ async def test_approval_timeout_no_reply(
     spawn_and_wait,
     async_engine,
     _fake_services,
+    monkeypatch,
 ) -> None:
     """Operator never replies; the runtime should treat the approval as
     denied/timed-out and the session should end cleanly."""
@@ -387,12 +388,19 @@ async def test_approval_timeout_no_reply(
         message_thread="test-thread-timeout",
     )
 
-    # Use a short runtime_timeout so the test does not hang for the
-    # default 120s if the runtime waits for the full window.
-    exit_code, logs = await spawn_and_wait(task, timeout_sec=180)
-    # The runtime may exit 0 (LLM concluded after deny) or non-zero
-    # (timed out on approval). Either way it must not hang.
-    assert exit_code in (0, -99) or exit_code >= 0, f"Unexpected exit: {exit_code}\n{logs[-800:]}"
+    from session_manager import container_lifecycle
+
+    load_agent_yaml = container_lifecycle.load_agent_yaml
+
+    def load_short_approval_timeout_agent_yaml(workflow: str):
+        agent_config = load_agent_yaml(workflow)
+        agent_config["runtime"] = {**agent_config.get("runtime", {}), "approval_timeout_sec": 20}
+        return agent_config
+
+    monkeypatch.setattr(container_lifecycle, "load_agent_yaml", load_short_approval_timeout_agent_yaml)
+
+    exit_code, logs = await spawn_and_wait(task, timeout_sec=45)
+    assert exit_code == 0, f"Approval timeout did not resolve cleanly.\nLogs:\n{logs}"
 
 
 # ─── §2.3.4 Late-session question reminder ───────────────────────

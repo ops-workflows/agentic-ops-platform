@@ -684,6 +684,7 @@ def spawn_and_wait(
             exit_code = result.get("StatusCode", -1)
         except TimeoutError:
             container.kill()
+            await asyncio.get_event_loop().run_in_executor(None, container.wait)
             exit_code = -99
 
         logs = container.logs(tail=500).decode("utf-8", errors="replace")

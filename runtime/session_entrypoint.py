@@ -89,6 +89,7 @@ CONVERSATION_BATCH_SIZE = int(os.environ.get("CONVERSATION_BATCH_SIZE", "5") or 
 CONVERSATION_BATCH_MAX_AGE_SEC = float(os.environ.get("CONVERSATION_BATCH_MAX_AGE_SEC", "30") or "30")
 CONTROL_REQUEST_TIMEOUT_SEC = float(os.environ.get("CLAUDE_CONTROL_TIMEOUT_SEC", "180"))
 QUERY_PROGRESS_TIMEOUT_SEC = float(os.environ.get("CLAUDE_QUERY_PROGRESS_TIMEOUT_SEC", "240"))
+OPERATOR_APPROVAL_TIMEOUT_SEC = float(os.environ.get("OPERATOR_APPROVAL_TIMEOUT_SEC", "3600"))
 
 # The Agent SDK's control-protocol `initialize` handshake can be slow when the
 # `claude` CLI cold-starts (esp. while MCP servers boot). The SDK derives its
@@ -1129,7 +1130,7 @@ async def _request_operator_approval(
     )
 
     client = await _get_client()
-    deadline = time.time() + 3600
+    deadline = time.time() + OPERATOR_APPROVAL_TIMEOUT_SEC
     params = {
         "task_id": TASK_ID,
         "tool_name": tool_name,

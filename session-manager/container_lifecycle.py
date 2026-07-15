@@ -227,6 +227,7 @@ async def spawn_agent_session(task: Task) -> RuntimeHandle | None:
             "TASK_WORKFLOW": task.workflow,
             "MAX_TURNS": str(agent_config.get("session", {}).get("max_turns", 50)),
             "RUNTIME_TIMEOUT_SEC": str(runtime.get("runtime_timeout_sec", 300)),
+            "OPERATOR_APPROVAL_TIMEOUT_SEC": str(runtime.get("approval_timeout_sec", 3600)),
             "ASK_USER_QUESTION_REMINDER_ENABLED": str(
                 runtime.get("ask_user_question_reminder", {}).get("enabled", True)
             ).lower(),
