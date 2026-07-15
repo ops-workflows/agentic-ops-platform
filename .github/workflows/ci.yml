@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      runtime_diagnostics:
+        description: Print runtime container logs and slow-test durations
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -42,9 +48,10 @@ jobs:
         run: make lint
 
       - name: Run full test suite
-        run: make test PYTEST_FLAGS="-vv -ra --durations=25"
+        run: make test PYTEST_FLAGS="-vv -ra${{ inputs.runtime_diagnostics && ' --durations=25' || '' }}"
         env:
           PYTHONUNBUFFERED: "1"
+          RUNTIME_TEST_DEBUG: ${{ inputs.runtime_diagnostics && '1' || '0' }}
           RUNTIME_BUILD: >-
             docker buildx build --load --cache-from=type=gha
             --cache-to=type=gha,mode=max

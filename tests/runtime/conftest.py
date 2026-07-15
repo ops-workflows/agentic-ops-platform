@@ -704,7 +704,7 @@ def spawn_and_wait(
                 await backup_memory(task.workflow)
             finally:
                 shared_settings.message_bus_api_url = original_message_bus_api_url
-        if exit_code != 0 or os.environ.get("RUNTIME_TEST_DEBUG") == "1":
+        if os.environ.get("RUNTIME_TEST_DEBUG") == "1":
             import sys as _sys
 
             _sys.stderr.write(f"\n===CONTAINER LOGS (exit={exit_code})===\n{logs}\n===END LOGS===\n")

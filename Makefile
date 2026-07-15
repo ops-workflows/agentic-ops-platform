@@ -87,7 +87,7 @@ clean-test-containers: ## Remove dangling test session containers
 	-@docker ps -a --filter "label=agentic_ops.type=agent-session" --format "{{.ID}}" | xargs -r docker rm -f
 
 format: ## Format code (ruff check + fix)
-	uv run ruff check . --fix && uv run ruff format .
+	uv run ruff check . --fix && uv run ruff format . && npm --prefix control-plane-ui run format
 
 lint: ## Lint (ruff check + format check)
-	uv run ruff check . && uv run ruff format --check .
+	uv run ruff check . && uv run ruff format --check . && npm --prefix control-plane-ui run lint && npm --prefix control-plane-ui run format:check

@@ -1,8 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Agent, AgentFilesResult, apiFetch } from '@/lib/api';
-import { getAgentModelBadgeClasses, getAgentModelInfo } from '@/lib/agent-model';
+import { type Agent, type AgentFilesResult, apiFetch } from '@/lib/api';
+import {
+  getAgentModelBadgeClasses,
+  getAgentModelInfo,
+} from '@/lib/agent-model';
 import { PluginPreview } from '@/components/plugin-preview';
 import { useParams } from 'next/navigation';
 
@@ -69,9 +72,16 @@ export default function AgentDetailPage() {
     if (tab === 'preview') loadPluginFiles();
   }, [tab, name, pluginFiles, pluginFilesLoading]);
 
-  if (loading) return <p className="text-[var(--color-text-tertiary)]">Loading agent...</p>;
-  if (!name) return <p className="text-[var(--color-text-tertiary)]">Invalid agent route</p>;
-  if (!agent) return <p className="text-[var(--color-text-tertiary)]">Agent not found</p>;
+  if (loading)
+    return (
+      <p className="text-[var(--color-text-tertiary)]">Loading agent...</p>
+    );
+  if (!name)
+    return (
+      <p className="text-[var(--color-text-tertiary)]">Invalid agent route</p>
+    );
+  if (!agent)
+    return <p className="text-[var(--color-text-tertiary)]">Agent not found</p>;
 
   const config = agent.config as Record<string, unknown>;
   const modelInfo = getAgentModelInfo(config);
@@ -81,19 +91,27 @@ export default function AgentDetailPage() {
       <div className="flex items-center justify-between mb-8">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="font-display text-3xl font-normal tracking-tight text-[var(--color-text-primary)]">{agent.name}</h1>
+            <h1 className="font-display text-3xl font-normal tracking-tight text-[var(--color-text-primary)]">
+              {agent.name}
+            </h1>
             <div className="flex items-center gap-2">
               {modelInfo && (
-                <span className={`rounded-full border px-2.5 py-0.5 text-[10px] font-medium ${getAgentModelBadgeClasses(modelInfo.tone)}`}>
+                <span
+                  className={`rounded-full border px-2.5 py-0.5 text-[10px] font-medium ${getAgentModelBadgeClasses(modelInfo.tone)}`}
+                >
                   {modelInfo.label}
                 </span>
               )}
-              <span className={`rounded-full border px-2.5 py-0.5 text-[10px] font-medium ${agent.paused ? 'border-[var(--color-warning)]/20 bg-[var(--color-warning-muted)] text-[var(--color-warning)]' : 'border-[var(--color-success)]/20 bg-[var(--color-success-muted)] text-[var(--color-success)]'}`}>
+              <span
+                className={`rounded-full border px-2.5 py-0.5 text-[10px] font-medium ${agent.paused ? 'border-[var(--color-warning)]/20 bg-[var(--color-warning-muted)] text-[var(--color-warning)]' : 'border-[var(--color-success)]/20 bg-[var(--color-success-muted)] text-[var(--color-success)]'}`}
+              >
                 {agent.paused ? 'Paused' : 'Active'}
               </span>
             </div>
           </div>
-          <p className="text-[var(--color-text-secondary)] mt-1">{agent.description}</p>
+          <p className="text-[var(--color-text-secondary)] mt-1">
+            {agent.description}
+          </p>
         </div>
       </div>
 
@@ -104,7 +122,9 @@ export default function AgentDetailPage() {
             key={t}
             onClick={() => setTab(t)}
             className={`px-4 py-2.5 text-sm border-b-2 transition-colors ${
-              tab === t ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]' : 'border-transparent text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]'
+              tab === t
+                ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
+                : 'border-transparent text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]'
             }`}
           >
             {t.charAt(0).toUpperCase() + t.slice(1)}
@@ -113,8 +133,8 @@ export default function AgentDetailPage() {
       </div>
 
       {/* Tab Content */}
-      {tab === 'preview' && (
-        pluginFilesLoading && !pluginFiles ? (
+      {tab === 'preview' &&
+        (pluginFilesLoading && !pluginFiles ? (
           <div className="bg-ops-surface border border-ops-border rounded-card p-5 text-sm text-[var(--color-text-tertiary)]">
             Loading plugin files...
           </div>
@@ -124,8 +144,7 @@ export default function AgentDetailPage() {
             files={pluginFiles?.files || {}}
             emptyMessage="This agent has no plugin directory files available yet."
           />
-        )
-      )}
+        ))}
 
       {tab === 'config' && (
         <div className="bg-ops-surface border border-ops-border rounded-card p-5">
@@ -136,27 +155,46 @@ export default function AgentDetailPage() {
       )}
 
       {tab === 'secrets' && (
-        <SecretsPanel agentName={name} secrets={secrets} onRefresh={loadSecrets} />
+        <SecretsPanel
+          agentName={name}
+          secrets={secrets}
+          onRefresh={loadSecrets}
+        />
       )}
 
       {tab === 'schedules' && (
         <div className="space-y-3">
-          {((config.schedules as Array<Record<string, unknown>>) || []).map((sched, i) => (
-            <div key={i} className="bg-ops-surface border border-ops-border rounded-card p-5">
-              <h3 className="font-medium text-[var(--color-text-primary)]">{sched.name as string}</h3>
-              <p className="text-sm text-[var(--color-text-secondary)] mt-1">Cron: <span className="font-mono text-[var(--color-accent)]">{sched.cron as string}</span></p>
-              <p className="text-sm text-[var(--color-text-secondary)]">{sched.prompt as string}</p>
-            </div>
-          ))}
+          {((config.schedules as Array<Record<string, unknown>>) || []).map(
+            (sched, i) => (
+              <div
+                key={i}
+                className="bg-ops-surface border border-ops-border rounded-card p-5"
+              >
+                <h3 className="font-medium text-[var(--color-text-primary)]">
+                  {sched.name as string}
+                </h3>
+                <p className="text-sm text-[var(--color-text-secondary)] mt-1">
+                  Cron:{' '}
+                  <span className="font-mono text-[var(--color-accent)]">
+                    {sched.cron as string}
+                  </span>
+                </p>
+                <p className="text-sm text-[var(--color-text-secondary)]">
+                  {sched.prompt as string}
+                </p>
+              </div>
+            ),
+          )}
           {!((config.schedules as unknown[]) || []).length && (
-            <p className="text-[var(--color-text-tertiary)]">No schedules configured</p>
+            <p className="text-[var(--color-text-tertiary)]">
+              No schedules configured
+            </p>
           )}
         </div>
       )}
     </div>
   );
 }
-
 
 function SecretsPanel({
   agentName,
@@ -174,7 +212,11 @@ function SecretsPanel({
   const [newDesc, setNewDesc] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const handleSave = async (key: string, value: string, description?: string) => {
+  const handleSave = async (
+    key: string,
+    value: string,
+    description?: string,
+  ) => {
     setBusy(true);
     try {
       await apiFetch(`/api/agents/${agentName}/secrets/${key}`, {
@@ -199,7 +241,9 @@ function SecretsPanel({
     if (!confirm(`Delete secret "${key}"?`)) return;
     setBusy(true);
     try {
-      await apiFetch(`/api/agents/${agentName}/secrets/${key}`, { method: 'DELETE' });
+      await apiFetch(`/api/agents/${agentName}/secrets/${key}`, {
+        method: 'DELETE',
+      });
       onRefresh();
     } catch (e) {
       console.error('Failed to delete secret', e);
@@ -231,8 +275,14 @@ function SecretsPanel({
             className="bg-ops-surface border border-ops-border rounded-card p-4 flex items-center justify-between"
           >
             <div>
-              <h3 className="font-mono text-sm font-medium text-[var(--color-text-primary)]">{s.name}</h3>
-              {s.description && <p className="text-xs text-[var(--color-text-tertiary)] mt-1">{s.description}</p>}
+              <h3 className="font-mono text-sm font-medium text-[var(--color-text-primary)]">
+                {s.name}
+              </h3>
+              {s.description && (
+                <p className="text-xs text-[var(--color-text-tertiary)] mt-1">
+                  {s.description}
+                </p>
+              )}
             </div>
             <div className="flex items-center gap-3">
               <span className="text-sm text-[var(--color-text-tertiary)] font-mono">
@@ -255,7 +305,10 @@ function SecretsPanel({
                     Save
                   </button>
                   <button
-                    onClick={() => { setEditingKey(null); setNewValue(''); }}
+                    onClick={() => {
+                      setEditingKey(null);
+                      setNewValue('');
+                    }}
                     className="px-2 py-1 bg-ops-surface-raised text-[var(--color-text-secondary)] text-xs rounded-btn"
                   >
                     Cancel
@@ -264,7 +317,10 @@ function SecretsPanel({
               ) : (
                 <div className="flex gap-2">
                   <button
-                    onClick={() => { setEditingKey(s.name); setNewValue(''); }}
+                    onClick={() => {
+                      setEditingKey(s.name);
+                      setNewValue('');
+                    }}
                     className="px-2 py-1 bg-ops-surface-raised text-[var(--color-text-secondary)] text-xs rounded-btn hover:text-[var(--color-text-primary)] transition-colors"
                   >
                     Update
@@ -283,27 +339,39 @@ function SecretsPanel({
         ))}
 
         {secrets.length === 0 && !adding && (
-          <p className="text-[var(--color-text-tertiary)] text-sm">No secrets configured for this agent.</p>
+          <p className="text-[var(--color-text-tertiary)] text-sm">
+            No secrets configured for this agent.
+          </p>
         )}
       </div>
 
       {/* Add new secret form */}
       {adding && (
         <div className="bg-ops-surface border border-ops-border rounded-card p-5 space-y-3">
-          <h3 className="text-sm font-medium text-[var(--color-text-primary)]">New Secret</h3>
+          <h3 className="text-sm font-medium text-[var(--color-text-primary)]">
+            New Secret
+          </h3>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs text-[var(--color-text-tertiary)]">Name (env var)</label>
+              <label className="text-xs text-[var(--color-text-tertiary)]">
+                Name (env var)
+              </label>
               <input
                 type="text"
                 placeholder="API_TOKEN"
                 className="w-full px-2 py-1.5 bg-ops-bg border border-ops-border rounded-input text-sm font-mono text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] focus:outline-none focus:border-[var(--color-accent)]"
                 value={newName}
-                onChange={(e) => setNewName(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ''))}
+                onChange={(e) =>
+                  setNewName(
+                    e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ''),
+                  )
+                }
               />
             </div>
             <div>
-              <label className="text-xs text-[var(--color-text-tertiary)]">Value</label>
+              <label className="text-xs text-[var(--color-text-tertiary)]">
+                Value
+              </label>
               <input
                 type="password"
                 placeholder="Secret value"
@@ -314,7 +382,9 @@ function SecretsPanel({
             </div>
           </div>
           <div>
-            <label className="text-xs text-[var(--color-text-tertiary)]">Description (optional)</label>
+            <label className="text-xs text-[var(--color-text-tertiary)]">
+              Description (optional)
+            </label>
             <input
               type="text"
               placeholder="What this secret is for"
@@ -332,7 +402,12 @@ function SecretsPanel({
               {busy ? 'Encrypting...' : 'Encrypt & Save'}
             </button>
             <button
-              onClick={() => { setAdding(false); setNewName(''); setNewValue(''); setNewDesc(''); }}
+              onClick={() => {
+                setAdding(false);
+                setNewName('');
+                setNewValue('');
+                setNewDesc('');
+              }}
               className="px-3 py-1.5 bg-ops-surface-raised text-[var(--color-text-secondary)] text-sm rounded-btn"
             >
               Cancel

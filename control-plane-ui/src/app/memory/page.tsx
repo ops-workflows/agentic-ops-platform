@@ -100,9 +100,14 @@ function shortenLabel(value: string, limit = 42) {
 }
 
 function summarizeChunkRow(row: Record<string, unknown>) {
-  const text = String(row.text ?? '').replace(/\\n/g, ' ').replace(/\s+/g, ' ').trim();
+  const text = String(row.text ?? '')
+    .replace(/\\n/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   if (text) return shortenLabel(text.replace(/^['"[{(\s]+/, ''), 48);
-  const context = String(row.context ?? '').replace(/\s+/g, ' ').trim();
+  const context = String(row.context ?? '')
+    .replace(/\s+/g, ' ')
+    .trim();
   if (context) return shortenLabel(context, 48);
   return shortenLabel(String(row.chunk_id ?? row.id ?? 'Chunk'), 48);
 }
@@ -130,12 +135,19 @@ function extractGraphKeywords(text: string) {
     if (trimmed.includes('__')) score += 20;
     if (/[A-Z]/.test(trimmed.slice(1))) score += 12;
     if (/_/.test(trimmed)) score += 8;
-    if (/error|flow|rule|salesforce|validation|close|reclamation|investigator/i.test(trimmed)) score += 10;
+    if (
+      /error|flow|rule|salesforce|validation|close|reclamation|investigator/i.test(
+        trimmed,
+      )
+    )
+      score += 10;
     scores.set(trimmed, Math.max(scores.get(trimmed) ?? 0, score));
   }
 
   return Array.from(scores.entries())
-    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .sort(
+      (left, right) => right[1] - left[1] || left[0].localeCompare(right[0]),
+    )
     .slice(0, 3)
     .map(([keyword]) => keyword);
 }
@@ -153,7 +165,10 @@ function clamp(value: number, minimum: number, maximum: number) {
 }
 
 function isGenericGraph(graph: HindsightGraphPreview) {
-  return graph.nodes.every((node, index) => node.label === `Node ${index + 1}` || /^node-\d+$/i.test(node.id));
+  return graph.nodes.every(
+    (node, index) =>
+      node.label === `Node ${index + 1}` || /^node-\d+$/i.test(node.id),
+  );
 }
 
 function buildVisualGraph(graph: HindsightGraphPreview | null) {
@@ -162,23 +177,48 @@ function buildVisualGraph(graph: HindsightGraphPreview | null) {
   const keywordNodes = new Map<string, VisualGraphNode>();
   const edgeWeights = new Map<string, number>();
 
-  if (graph && graph.nodes.length > 0 && graph.edges.length > 0 && !isGenericGraph(graph)) {
+  if (
+    graph &&
+    graph.nodes.length > 0 &&
+    graph.edges.length > 0 &&
+    !isGenericGraph(graph)
+  ) {
     const nodes = graph.nodes.slice(0, 28).map((node) => ({
       id: node.id,
       label: shortenLabel(node.label, 28),
-      kind: (node.node_type === 'document' ? 'document' : node.node_type === 'keyword' ? 'keyword' : 'memory') as VisualGraphNodeKind,
-      radius: node.node_type === 'document' ? 12 : node.node_type === 'keyword' ? 7 : 9,
+      kind: (node.node_type === 'document'
+        ? 'document'
+        : node.node_type === 'keyword'
+          ? 'keyword'
+          : 'memory') as VisualGraphNodeKind,
+      radius:
+        node.node_type === 'document'
+          ? 12
+          : node.node_type === 'keyword'
+            ? 7
+            : 9,
     }));
     const edges = graph.edges
-      .filter((edge) => nodes.some((node) => node.id === edge.source) && nodes.some((node) => node.id === edge.target))
+      .filter(
+        (edge) =>
+          nodes.some((node) => node.id === edge.source) &&
+          nodes.some((node) => node.id === edge.target),
+      )
       .slice(0, 60)
-      .map((edge) => ({ source: edge.source, target: edge.target, weight: edge.weight ?? 1 }));
+      .map((edge) => ({
+        source: edge.source,
+        target: edge.target,
+        weight: edge.weight ?? 1,
+      }));
     return { nodes, edges, mode: 'live' as const };
   }
 
   for (const row of graph?.table_rows.slice(0, 22) ?? []) {
-    const chunkId = String(row.chunk_id ?? row.id ?? `chunk-${chunkNodes.size + 1}`);
-    const documentId = typeof row.document_id === 'string' ? row.document_id : null;
+    const chunkId = String(
+      row.chunk_id ?? row.id ?? `chunk-${chunkNodes.size + 1}`,
+    );
+    const documentId =
+      typeof row.document_id === 'string' ? row.document_id : null;
     if (!chunkNodes.has(chunkId)) {
       chunkNodes.set(chunkId, {
         id: chunkId,
@@ -199,7 +239,10 @@ function buildVisualGraph(graph: HindsightGraphPreview | null) {
 
     if (documentId) {
       const documentEdgeKey = `${documentId}::${chunkId}`;
-      edgeWeights.set(documentEdgeKey, (edgeWeights.get(documentEdgeKey) ?? 0) + 1);
+      edgeWeights.set(
+        documentEdgeKey,
+        (edgeWeights.get(documentEdgeKey) ?? 0) + 1,
+      );
     }
 
     const keywordSource = `${String(row.text ?? '')} ${String(row.context ?? '')}`;
@@ -214,7 +257,10 @@ function buildVisualGraph(graph: HindsightGraphPreview | null) {
         });
       }
       const keywordEdgeKey = `${chunkId}::${keywordId}`;
-      edgeWeights.set(keywordEdgeKey, (edgeWeights.get(keywordEdgeKey) ?? 0) + 1);
+      edgeWeights.set(
+        keywordEdgeKey,
+        (edgeWeights.get(keywordEdgeKey) ?? 0) + 1,
+      );
     }
   }
 
@@ -229,20 +275,28 @@ function buildVisualGraph(graph: HindsightGraphPreview | null) {
       const [source, target] = key.split('::');
       return { source, target, weight };
     })
-    .filter((edge) => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target))
+    .filter(
+      (edge) =>
+        visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target),
+    )
     .slice(0, 72);
 
   return { nodes, edges, mode: 'derived' as const };
 }
 
-function layoutVisualGraph(nodes: VisualGraphNode[], edges: VisualGraphEdge[], width: number, height: number) {
+function layoutVisualGraph(
+  nodes: VisualGraphNode[],
+  edges: VisualGraphEdge[],
+  width: number,
+  height: number,
+) {
   const positions = new Map(
     nodes.map((node) => {
       const seed = hashString(node.id);
       const x = 80 + (seed % Math.max(1, width - 160));
       const y = 70 + ((seed >> 8) % Math.max(1, height - 140));
       return [node.id, { x, y, vx: 0, vy: 0 }];
-    })
+    }),
   );
 
   for (let iteration = 0; iteration < 140; iteration += 1) {
@@ -307,8 +361,12 @@ function layoutVisualGraph(nodes: VisualGraphNode[], edges: VisualGraphEdge[], w
 export default function MemoryPage() {
   const [summary, setSummary] = useState<PlatformMemories | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
-  const [bankDetail, setBankDetail] = useState<HindsightBankDetail | null>(null);
-  const [agentDetail, setAgentDetail] = useState<AgentMemoryDetail | null>(null);
+  const [bankDetail, setBankDetail] = useState<HindsightBankDetail | null>(
+    null,
+  );
+  const [agentDetail, setAgentDetail] = useState<AgentMemoryDetail | null>(
+    null,
+  );
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -320,11 +378,19 @@ export default function MemoryPage() {
         const search = new URLSearchParams(window.location.search);
         const requestedBank = search.get('bank');
         const requestedAgent = search.get('agent');
-        if (requestedBank && payload.hindsight_banks.some((bank) => bank.bank_id === requestedBank)) {
+        if (
+          requestedBank &&
+          payload.hindsight_banks.some((bank) => bank.bank_id === requestedBank)
+        ) {
           setSelection({ kind: 'hindsight', id: requestedBank });
           return;
         }
-        if (requestedAgent && payload.agent_memories.some((agent) => agent.agent_name === requestedAgent)) {
+        if (
+          requestedAgent &&
+          payload.agent_memories.some(
+            (agent) => agent.agent_name === requestedAgent,
+          )
+        ) {
           setSelection({ kind: 'agent', id: requestedAgent });
           return;
         }
@@ -337,7 +403,11 @@ export default function MemoryPage() {
           setSelection({ kind: 'agent', id: firstAgent });
         }
       })
-      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load memory summary'))
+      .catch((err) =>
+        setError(
+          err instanceof Error ? err.message : 'Failed to load memory summary',
+        ),
+      )
       .finally(() => setLoading(false));
   }, []);
 
@@ -365,13 +435,17 @@ export default function MemoryPage() {
 
     if (selection.kind === 'hindsight') {
       setAgentDetail(null);
-      apiFetch<HindsightBankDetail>(`/api/platform/memories/hindsight/${encodeURIComponent(selection.id)}?limit=10`)
+      apiFetch<HindsightBankDetail>(
+        `/api/platform/memories/hindsight/${encodeURIComponent(selection.id)}?limit=10`,
+      )
         .then(setBankDetail)
         .catch(() =>
           setBankDetail({
             bank_id: selection.id,
             listed_in_hindsight: false,
-            warnings: ['Failed to load bank detail from the control-plane API.'],
+            warnings: [
+              'Failed to load bank detail from the control-plane API.',
+            ],
             stats: {
               total_nodes: 0,
               total_links: 0,
@@ -384,33 +458,50 @@ export default function MemoryPage() {
             },
             graph: null,
             entries: [],
-          })
+          }),
         )
         .finally(() => setDetailLoading(false));
       return;
     }
 
     setBankDetail(null);
-    apiFetch<AgentMemoryDetail>(`/api/platform/memories/agents/${encodeURIComponent(selection.id)}`)
+    apiFetch<AgentMemoryDetail>(
+      `/api/platform/memories/agents/${encodeURIComponent(selection.id)}`,
+    )
       .then(setAgentDetail)
-      .catch(() => setAgentDetail({ agent_name: selection.id, archive_key: null, files: [] }))
+      .catch(() =>
+        setAgentDetail({
+          agent_name: selection.id,
+          archive_key: null,
+          files: [],
+        }),
+      )
       .finally(() => setDetailLoading(false));
   }, [selection]);
 
   return (
     <div className="space-y-6">
       <div>
-        <p className="text-[11px] uppercase tracking-[0.2em] text-[var(--color-text-tertiary)]">Memory</p>
+        <p className="text-[11px] uppercase tracking-[0.2em] text-[var(--color-text-tertiary)]">
+          Memory
+        </p>
         <h1 className="mt-2 font-display text-4xl font-normal leading-[1.1] tracking-tight text-[var(--color-text-primary)]">
           Memory explorer
         </h1>
         <p className="mt-3 max-w-3xl text-sm leading-7 text-[var(--color-text-secondary)]">
-          Inspect Hindsight bank contents and Claude agent memory files from one place.
+          Inspect Hindsight bank contents and Claude agent memory files from one
+          place.
         </p>
       </div>
 
-      {loading ? <p className="text-sm text-[var(--color-text-tertiary)]">Loading memory surfaces...</p> : null}
-      {error ? <p className="text-sm text-[var(--color-error)]">{error}</p> : null}
+      {loading ? (
+        <p className="text-sm text-[var(--color-text-tertiary)]">
+          Loading memory surfaces...
+        </p>
+      ) : null}
+      {error ? (
+        <p className="text-sm text-[var(--color-error)]">{error}</p>
+      ) : null}
 
       {!loading && !error && summary ? (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(220px,280px)_minmax(0,1fr)]">
@@ -418,7 +509,9 @@ export default function MemoryPage() {
             <HindsightSection
               banks={summary.hindsight_banks}
               selection={selection}
-              onSelect={(bankId) => setSelection({ kind: 'hindsight', id: bankId })}
+              onSelect={(bankId) =>
+                setSelection({ kind: 'hindsight', id: bankId })
+              }
             />
 
             <div className="my-3 h-px bg-ops-border" />
@@ -429,32 +522,66 @@ export default function MemoryPage() {
                 id: agent.agent_name,
                 label: agent.agent_name,
                 meta: `${agent.version_count} archives`,
-                active: selection?.kind === 'agent' && selection.id === agent.agent_name,
-                onClick: () => setSelection({ kind: 'agent', id: agent.agent_name }),
+                active:
+                  selection?.kind === 'agent' &&
+                  selection.id === agent.agent_name,
+                onClick: () =>
+                  setSelection({ kind: 'agent', id: agent.agent_name }),
               }))}
               emptyMessage="No agent memory archives discovered"
             />
           </aside>
 
           <section className="min-w-0 rounded-card border border-ops-border bg-ops-surface p-5">
-            {detailLoading ? <p className="text-sm text-[var(--color-text-tertiary)]">Loading selected memory...</p> : null}
+            {detailLoading ? (
+              <p className="text-sm text-[var(--color-text-tertiary)]">
+                Loading selected memory...
+              </p>
+            ) : null}
 
             {!detailLoading && selection?.kind === 'hindsight' && bankDetail ? (
               <div className="space-y-4">
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="text-xl font-medium text-[var(--color-text-primary)]">{bankDetail.bank_id}</h2>
+                    <h2 className="text-xl font-medium text-[var(--color-text-primary)]">
+                      {bankDetail.bank_id}
+                    </h2>
                   </div>
-                  <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Live Hindsight bank inspection focused on retained memory units and graph structure.</p>
+                  <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
+                    Live Hindsight bank inspection focused on retained memory
+                    units and graph structure.
+                  </p>
                   <div className="mt-3 flex flex-wrap gap-1.5">
-                    <MemoryTag label={bankDetail.listed_in_hindsight ? 'Listed live' : 'Configured only'} />
-                    {summary.hindsight_banks
-                      .find((bank) => bank.bank_id === bankDetail.bank_id)
-                      ?.kind ? <MemoryTag label={summary.hindsight_banks.find((bank) => bank.bank_id === bankDetail.bank_id)?.kind || 'unknown'} /> : null}
-                    {(summary.hindsight_banks.find((bank) => bank.bank_id === bankDetail.bank_id)?.workflows || []).length === 0 ? (
+                    <MemoryTag
+                      label={
+                        bankDetail.listed_in_hindsight
+                          ? 'Listed live'
+                          : 'Configured only'
+                      }
+                    />
+                    {summary.hindsight_banks.find(
+                      (bank) => bank.bank_id === bankDetail.bank_id,
+                    )?.kind ? (
+                      <MemoryTag
+                        label={
+                          summary.hindsight_banks.find(
+                            (bank) => bank.bank_id === bankDetail.bank_id,
+                          )?.kind || 'unknown'
+                        }
+                      />
+                    ) : null}
+                    {(
+                      summary.hindsight_banks.find(
+                        (bank) => bank.bank_id === bankDetail.bank_id,
+                      )?.workflows || []
+                    ).length === 0 ? (
                       <MemoryTag label="Shared default" />
                     ) : (
-                      (summary.hindsight_banks.find((bank) => bank.bank_id === bankDetail.bank_id)?.workflows || []).map((workflow) => (
+                      (
+                        summary.hindsight_banks.find(
+                          (bank) => bank.bank_id === bankDetail.bank_id,
+                        )?.workflows || []
+                      ).map((workflow) => (
                         <MemoryTag key={workflow} label={workflow} />
                       ))
                     )}
@@ -466,9 +593,14 @@ export default function MemoryPage() {
 
                 {bankDetail.warnings.length > 0 ? (
                   <div className="space-y-2 rounded-[16px] border border-[var(--color-accent)]/20 bg-[var(--color-accent-muted)] px-4 py-3">
-                    <div className="text-xs uppercase tracking-[0.16em] text-[var(--color-text-tertiary)]">Operator notes</div>
+                    <div className="text-xs uppercase tracking-[0.16em] text-[var(--color-text-tertiary)]">
+                      Operator notes
+                    </div>
                     {bankDetail.warnings.map((warning) => (
-                      <p key={warning} className="text-sm leading-6 text-[var(--color-text-secondary)]">
+                      <p
+                        key={warning}
+                        className="text-sm leading-6 text-[var(--color-text-secondary)]"
+                      >
                         {warning}
                       </p>
                     ))}
@@ -476,21 +608,36 @@ export default function MemoryPage() {
                 ) : null}
 
                 <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-3">
-                  <StatCard label="Nodes" value={formatNumber(bankDetail.stats.total_nodes)} />
-                  <StatCard label="Links" value={formatNumber(bankDetail.stats.total_links)} />
-                  <StatCard label="Documents" value={formatNumber(bankDetail.stats.total_documents)} />
+                  <StatCard
+                    label="Nodes"
+                    value={formatNumber(bankDetail.stats.total_nodes)}
+                  />
+                  <StatCard
+                    label="Links"
+                    value={formatNumber(bankDetail.stats.total_links)}
+                  />
+                  <StatCard
+                    label="Documents"
+                    value={formatNumber(bankDetail.stats.total_documents)}
+                  />
                 </div>
 
                 <section className="rounded-[16px] border border-ops-border bg-[var(--color-surface-raised)] p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <h3 className="text-sm font-medium text-[var(--color-text-primary)]">Knowledge graph</h3>
+                      <h3 className="text-sm font-medium text-[var(--color-text-primary)]">
+                        Knowledge graph
+                      </h3>
                       <p className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">
-                        Uses Hindsight graph data when it is meaningful, otherwise derives a relationship map from chunk rows and recurring terms.
+                        Uses Hindsight graph data when it is meaningful,
+                        otherwise derives a relationship map from chunk rows and
+                        recurring terms.
                       </p>
                     </div>
                     <div className="text-xs text-[var(--color-text-tertiary)]">
-                      {bankDetail.graph ? `${bankDetail.graph.nodes.length} nodes / ${bankDetail.graph.edges.length} edges shown` : 'Unavailable'}
+                      {bankDetail.graph
+                        ? `${bankDetail.graph.nodes.length} nodes / ${bankDetail.graph.edges.length} edges shown`
+                        : 'Unavailable'}
                     </div>
                   </div>
                   <div className="mt-4">
@@ -498,22 +645,41 @@ export default function MemoryPage() {
                   </div>
                 </section>
 
-                <DetailSection title="Memory units" subtitle="Rows from /memories/list for this bank.">
+                <DetailSection
+                  title="Memory units"
+                  subtitle="Rows from /memories/list for this bank."
+                >
                   {bankDetail.entries.map((entry) => (
-                    <article key={entry.id} className="rounded-[12px] border border-ops-border bg-[var(--color-surface-raised)] p-4">
+                    <article
+                      key={entry.id}
+                      className="rounded-[12px] border border-ops-border bg-[var(--color-surface-raised)] p-4"
+                    >
                       <div className="flex items-center justify-between gap-2">
-                        <div className="text-xs text-[var(--color-text-tertiary)]">{entry.id}</div>
-                        <div className="text-xs text-[var(--color-text-tertiary)]">{formatDateTime(entry.created_at)}</div>
+                        <div className="text-xs text-[var(--color-text-tertiary)]">
+                          {entry.id}
+                        </div>
+                        <div className="text-xs text-[var(--color-text-tertiary)]">
+                          {formatDateTime(entry.created_at)}
+                        </div>
                       </div>
                       <div className="mt-3 flex flex-wrap gap-1.5">
-                        {Object.entries(entry.metadata).slice(0, 6).map(([key, value]) => (
-                          <MemoryTag key={`${entry.id}-${key}`} label={`${key}: ${stringifyValue(value)}`} />
-                        ))}
+                        {Object.entries(entry.metadata)
+                          .slice(0, 6)
+                          .map(([key, value]) => (
+                            <MemoryTag
+                              key={`${entry.id}-${key}`}
+                              label={`${key}: ${stringifyValue(value)}`}
+                            />
+                          ))}
                       </div>
-                      <pre className="mt-3 max-h-[260px] overflow-auto whitespace-pre-wrap break-words rounded-[10px] bg-ops-surface p-3 text-xs leading-6 text-[var(--color-text-secondary)]">{entry.content}</pre>
+                      <pre className="mt-3 max-h-[260px] overflow-auto whitespace-pre-wrap break-words rounded-[10px] bg-ops-surface p-3 text-xs leading-6 text-[var(--color-text-secondary)]">
+                        {entry.content}
+                      </pre>
                     </article>
                   ))}
-                  {bankDetail.entries.length === 0 ? <EmptyState message="No memory units returned for this bank." /> : null}
+                  {bankDetail.entries.length === 0 ? (
+                    <EmptyState message="No memory units returned for this bank." />
+                  ) : null}
                 </DetailSection>
               </div>
             ) : null}
@@ -521,27 +687,47 @@ export default function MemoryPage() {
             {!detailLoading && selection?.kind === 'agent' && agentDetail ? (
               <div className="space-y-4">
                 <div>
-                  <h2 className="text-xl font-medium text-[var(--color-text-primary)]">{agentDetail.agent_name}</h2>
-                  <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Readable file previews from the latest Claude agent memory archive.</p>
-                  <div className="mt-2 text-xs text-[var(--color-text-tertiary)]">{agentDetail.archive_key || '-'}</div>
+                  <h2 className="text-xl font-medium text-[var(--color-text-primary)]">
+                    {agentDetail.agent_name}
+                  </h2>
+                  <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
+                    Readable file previews from the latest Claude agent memory
+                    archive.
+                  </p>
+                  <div className="mt-2 text-xs text-[var(--color-text-tertiary)]">
+                    {agentDetail.archive_key || '-'}
+                  </div>
                 </div>
 
                 {agentDetail.files.map((file) => (
-                  <article key={file.path} className="rounded-[12px] border border-ops-border bg-[var(--color-surface-raised)] p-4">
-                    <div className="text-xs font-medium text-[var(--color-text-primary)]">{file.path}</div>
-                    <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">{file.size_bytes.toLocaleString()} bytes</div>
-                    <pre className="mt-3 max-h-[260px] overflow-auto whitespace-pre-wrap break-words rounded-[10px] bg-ops-surface p-3 text-xs leading-6 text-[var(--color-text-secondary)]">{file.preview}</pre>
+                  <article
+                    key={file.path}
+                    className="rounded-[12px] border border-ops-border bg-[var(--color-surface-raised)] p-4"
+                  >
+                    <div className="text-xs font-medium text-[var(--color-text-primary)]">
+                      {file.path}
+                    </div>
+                    <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+                      {file.size_bytes.toLocaleString()} bytes
+                    </div>
+                    <pre className="mt-3 max-h-[260px] overflow-auto whitespace-pre-wrap break-words rounded-[10px] bg-ops-surface p-3 text-xs leading-6 text-[var(--color-text-secondary)]">
+                      {file.preview}
+                    </pre>
                   </article>
                 ))}
 
                 {agentDetail.files.length === 0 ? (
-                  <p className="text-sm text-[var(--color-text-tertiary)]">No readable files found in this archive.</p>
+                  <p className="text-sm text-[var(--color-text-tertiary)]">
+                    No readable files found in this archive.
+                  </p>
                 ) : null}
               </div>
             ) : null}
 
             {!detailLoading && !selection ? (
-              <p className="text-sm text-[var(--color-text-tertiary)]">Select a memory source from the left.</p>
+              <p className="text-sm text-[var(--color-text-tertiary)]">
+                Select a memory source from the left.
+              </p>
             ) : null}
           </section>
         </div>
@@ -556,12 +742,20 @@ function MemorySection({
   emptyMessage,
 }: {
   title: string;
-  items: Array<{ id: string; label: string; meta: string; active: boolean; onClick: () => void }>;
+  items: Array<{
+    id: string;
+    label: string;
+    meta: string;
+    active: boolean;
+    onClick: () => void;
+  }>;
   emptyMessage: string;
 }) {
   return (
     <div className="space-y-2">
-      <div className="px-2 text-[11px] uppercase tracking-[0.18em] text-[var(--color-text-tertiary)]">{title}</div>
+      <div className="px-2 text-[11px] uppercase tracking-[0.18em] text-[var(--color-text-tertiary)]">
+        {title}
+      </div>
       {items.map((item) => (
         <button
           key={item.id}
@@ -573,11 +767,19 @@ function MemorySection({
               : 'border-transparent bg-[var(--color-surface-raised)] hover:border-ops-border'
           }`}
         >
-          <div className="text-sm font-medium text-[var(--color-text-primary)]">{item.label}</div>
-          <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">{item.meta}</div>
+          <div className="text-sm font-medium text-[var(--color-text-primary)]">
+            {item.label}
+          </div>
+          <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+            {item.meta}
+          </div>
         </button>
       ))}
-      {items.length === 0 ? <div className="px-2 py-3 text-sm text-[var(--color-text-tertiary)]">{emptyMessage}</div> : null}
+      {items.length === 0 ? (
+        <div className="px-2 py-3 text-sm text-[var(--color-text-tertiary)]">
+          {emptyMessage}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -593,9 +795,12 @@ function HindsightSection({
 }) {
   return (
     <div className="space-y-2">
-      <div className="px-2 text-[11px] uppercase tracking-[0.18em] text-[var(--color-text-tertiary)]">Hindsight Banks</div>
+      <div className="px-2 text-[11px] uppercase tracking-[0.18em] text-[var(--color-text-tertiary)]">
+        Hindsight Banks
+      </div>
       {banks.map((bank) => {
-        const active = selection?.kind === 'hindsight' && selection.id === bank.bank_id;
+        const active =
+          selection?.kind === 'hindsight' && selection.id === bank.bank_id;
         return (
           <button
             key={bank.bank_id}
@@ -607,24 +812,38 @@ function HindsightSection({
                 : 'border-transparent bg-[var(--color-surface-raised)] hover:border-ops-border'
             }`}
           >
-            <div className="text-sm font-medium text-[var(--color-text-primary)]">{bank.bank_id}</div>
+            <div className="text-sm font-medium text-[var(--color-text-primary)]">
+              {bank.bank_id}
+            </div>
           </button>
         );
       })}
-      {banks.length === 0 ? <div className="px-2 py-3 text-sm text-[var(--color-text-tertiary)]">No Hindsight banks discovered</div> : null}
+      {banks.length === 0 ? (
+        <div className="px-2 py-3 text-sm text-[var(--color-text-tertiary)]">
+          No Hindsight banks discovered
+        </div>
+      ) : null}
     </div>
   );
 }
 
 function MemoryTag({ label }: { label: string }) {
-  return <span className="rounded-full bg-ops-surface px-2.5 py-1 text-[10px] text-[var(--color-text-tertiary)]">{label}</span>;
+  return (
+    <span className="rounded-full bg-ops-surface px-2.5 py-1 text-[10px] text-[var(--color-text-tertiary)]">
+      {label}
+    </span>
+  );
 }
 
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-[14px] border border-ops-border bg-[var(--color-surface-raised)] px-4 py-3">
-      <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--color-text-tertiary)]">{label}</div>
-      <div className="mt-2 text-lg font-medium text-[var(--color-text-primary)]">{value}</div>
+      <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--color-text-tertiary)]">
+        {label}
+      </div>
+      <div className="mt-2 text-lg font-medium text-[var(--color-text-primary)]">
+        {value}
+      </div>
     </div>
   );
 }
@@ -641,8 +860,12 @@ function DetailSection({
   return (
     <section className="min-w-0 space-y-3 rounded-[16px] border border-ops-border bg-[var(--color-surface-raised)] p-4">
       <div>
-        <h3 className="text-sm font-medium text-[var(--color-text-primary)]">{title}</h3>
-        <p className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">{subtitle}</p>
+        <h3 className="text-sm font-medium text-[var(--color-text-primary)]">
+          {title}
+        </h3>
+        <p className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">
+          {subtitle}
+        </p>
       </div>
       {children}
     </section>
@@ -653,30 +876,36 @@ function EmptyState({ message }: { message: string }) {
   return <p className="text-sm text-[var(--color-text-tertiary)]">{message}</p>;
 }
 
-function BankGraphPreview({
-  graph,
-}: {
-  graph: HindsightGraphPreview | null;
-}) {
+function BankGraphPreview({ graph }: { graph: HindsightGraphPreview | null }) {
   if (!graph || graph.nodes.length === 0) {
     return <EmptyState message="No graph nodes returned for this bank." />;
   }
 
   const visualGraph = buildVisualGraph(graph);
   if (visualGraph.nodes.length === 0) {
-    return <EmptyState message="No useful graph relationships could be derived for this bank." />;
+    return (
+      <EmptyState message="No useful graph relationships could be derived for this bank." />
+    );
   }
 
   const width = 760;
   const height = 460;
-  const positions = layoutVisualGraph(visualGraph.nodes, visualGraph.edges, width, height);
+  const positions = layoutVisualGraph(
+    visualGraph.nodes,
+    visualGraph.edges,
+    width,
+    height,
+  );
   const legend = [
     { label: 'Documents', kind: 'document' as const },
     { label: 'Chunks', kind: 'chunk' as const },
     { label: 'Recurring terms', kind: 'keyword' as const },
   ];
 
-  const colorByKind: Record<VisualGraphNodeKind, { fill: string; stroke: string; label: string }> = {
+  const colorByKind: Record<
+    VisualGraphNodeKind,
+    { fill: string; stroke: string; label: string }
+  > = {
     document: { fill: '#f4b860', stroke: '#f8d59a', label: '#fff6e9' },
     chunk: { fill: '#6aa6ff', stroke: '#bbd5ff', label: '#dceaff' },
     keyword: { fill: '#8fe3c0', stroke: '#d8fff0', label: '#eafff5' },
@@ -692,12 +921,27 @@ function BankGraphPreview({
               <stop offset="0%" stopColor="#182534" />
               <stop offset="100%" stopColor="#0a1018" />
             </radialGradient>
-            <pattern id="graphGrid" width="32" height="32" patternUnits="userSpaceOnUse">
-              <path d="M 32 0 L 0 0 0 32" fill="none" stroke="rgba(190,210,255,0.08)" strokeWidth="1" />
+            <pattern
+              id="graphGrid"
+              width="32"
+              height="32"
+              patternUnits="userSpaceOnUse"
+            >
+              <path
+                d="M 32 0 L 0 0 0 32"
+                fill="none"
+                stroke="rgba(190,210,255,0.08)"
+                strokeWidth="1"
+              />
             </pattern>
           </defs>
           <rect width={width} height={height} fill="url(#graphGlow)" />
-          <rect width={width} height={height} fill="url(#graphGrid)" opacity="0.6" />
+          <rect
+            width={width}
+            height={height}
+            fill="url(#graphGrid)"
+            opacity="0.6"
+          />
           {visualGraph.edges.map((edge) => {
             const source = positions.get(edge.source);
             const target = positions.get(edge.target);
@@ -721,11 +965,29 @@ function BankGraphPreview({
             const palette = colorByKind[node.kind];
             return (
               <g key={node.id}>
-                <circle cx={position.x} cy={position.y} r={node.radius + 10} fill={palette.fill} opacity="0.12" />
-                <circle cx={position.x} cy={position.y} r={node.radius} fill={palette.fill} stroke={palette.stroke} strokeWidth="1.5" />
+                <circle
+                  cx={position.x}
+                  cy={position.y}
+                  r={node.radius + 10}
+                  fill={palette.fill}
+                  opacity="0.12"
+                />
+                <circle
+                  cx={position.x}
+                  cy={position.y}
+                  r={node.radius}
+                  fill={palette.fill}
+                  stroke={palette.stroke}
+                  strokeWidth="1.5"
+                />
                 <title>{node.label}</title>
                 {node.kind !== 'chunk' ? (
-                  <text x={position.x + node.radius + 8} y={position.y + 4} fill={palette.label} fontSize="12">
+                  <text
+                    x={position.x + node.radius + 8}
+                    y={position.y + 4}
+                    fill={palette.label}
+                    fontSize="12"
+                  >
                     {shortenLabel(node.label, 22)}
                   </text>
                 ) : null}
@@ -737,11 +999,19 @@ function BankGraphPreview({
 
       <div className="space-y-3">
         <div className="rounded-[16px] border border-ops-border bg-ops-surface px-4 py-3">
-          <div className="text-xs uppercase tracking-[0.16em] text-[var(--color-text-tertiary)]">Legend</div>
+          <div className="text-xs uppercase tracking-[0.16em] text-[var(--color-text-tertiary)]">
+            Legend
+          </div>
           <div className="mt-3 space-y-2">
             {legend.map((item) => (
-              <div key={item.kind} className="flex items-center gap-3 text-sm text-[var(--color-text-secondary)]">
-                <span className="h-3 w-3 rounded-full" style={{ backgroundColor: colorByKind[item.kind].fill }} />
+              <div
+                key={item.kind}
+                className="flex items-center gap-3 text-sm text-[var(--color-text-secondary)]"
+              >
+                <span
+                  className="h-3 w-3 rounded-full"
+                  style={{ backgroundColor: colorByKind[item.kind].fill }}
+                />
                 <span>{item.label}</span>
               </div>
             ))}
@@ -750,11 +1020,22 @@ function BankGraphPreview({
 
         {graph.table_rows.length > 0 ? (
           <div className="space-y-2">
-            <div className="text-xs uppercase tracking-[0.16em] text-[var(--color-text-tertiary)]">Source rows</div>
+            <div className="text-xs uppercase tracking-[0.16em] text-[var(--color-text-tertiary)]">
+              Source rows
+            </div>
             {graph.table_rows.slice(0, 4).map((row, index) => (
-              <article key={`${index}-${stringifyValue(row.id)}`} className="rounded-[12px] border border-ops-border bg-ops-surface px-3 py-3">
-                <div className="text-sm font-medium text-[var(--color-text-primary)]">{summarizeChunkRow(row)}</div>
-                <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">{stringifyValue(row.context ?? row.entities ?? row.date ?? '-')}</div>
+              <article
+                key={`${index}-${stringifyValue(row.id)}`}
+                className="rounded-[12px] border border-ops-border bg-ops-surface px-3 py-3"
+              >
+                <div className="text-sm font-medium text-[var(--color-text-primary)]">
+                  {summarizeChunkRow(row)}
+                </div>
+                <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+                  {stringifyValue(
+                    row.context ?? row.entities ?? row.date ?? '-',
+                  )}
+                </div>
               </article>
             ))}
           </div>

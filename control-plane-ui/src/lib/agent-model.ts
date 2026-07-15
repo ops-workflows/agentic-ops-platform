@@ -14,9 +14,14 @@ function formatModelLabel(model: string): string {
   return model.charAt(0).toUpperCase() + model.slice(1);
 }
 
-export function getAgentModelInfo(config: Record<string, unknown>): AgentModelInfo | null {
+export function getAgentModelInfo(
+  config: Record<string, unknown>,
+): AgentModelInfo | null {
   const session = isRecord(config.session) ? config.session : null;
-  const rawModel = typeof session?.model === 'string' ? session.model.trim().toLowerCase() : '';
+  const rawModel =
+    typeof session?.model === 'string'
+      ? session.model.trim().toLowerCase()
+      : '';
 
   if (!rawModel) {
     return null;
