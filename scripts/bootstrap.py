@@ -16,19 +16,13 @@ Agentic Ops config has three layers (see docs/roadmap for the full picture):
 This script only produces layer 1. It never reads or writes the workflow
 repo's `platform-config.yaml`.
 
-Usage:
-    python scripts/bootstrap.py                       # interactive
-    python scripts/bootstrap.py --non-interactive ...  # CI-friendly
-
-Every prompt has a corresponding --flag and environment variable override so
-the same script can run non-interactively in pipelines.
+Run through `make bootstrap`. The script always prompts for the operator-owned
+bootstrap values and writes the standard artifact for the selected target.
 """
 
 from __future__ import annotations
 
-import argparse
 import getpass
-import os
 import stat
 import sys
 from dataclasses import dataclass
@@ -49,40 +43,50 @@ class BootstrapConfig:
     repo_pat: str = ""
     local_path: str = ""
     age_identity: str = ""
-    model_gateway_api_key: str = ""
+    llm_api_key: str = ""
+    pg_password: str = ""
+    object_store_secret_key: str = ""
+    namespace: str = "default"
 
     def validate(self) -> None:
         if self.target not in VALID_TARGETS:
-            raise ValueError(f"--target must be one of {VALID_TARGETS}, got {self.target!r}")
+            raise ValueError(f"Deployment target must be one of {VALID_TARGETS}, got {self.target!r}")
         if self.source not in VALID_SOURCES:
-            raise ValueError(f"--source must be one of {VALID_SOURCES}, got {self.source!r}")
+            raise ValueError(f"Workflow source must be one of {VALID_SOURCES}, got {self.source!r}")
         if self.source == "remote" and self.target == "compose":
             raise ValueError(
                 "compose deployments bind-mount a local workflow-repo checkout today; "
-                "use --source local for --target compose, or --target kubernetes/gcp for git-based sync"
+                "select local for compose, or kubernetes/gcp for git-based sync"
             )
         if self.source == "remote" and not self.repo_url:
-            raise ValueError("--repo-url is required for --source remote")
+            raise ValueError("Workflow repo URL is required for a remote source")
         if self.source == "local" and not self.local_path:
-            raise ValueError("--local-path is required for --source local")
+            raise ValueError("Local workflow-repo checkout path is required for a local source")
         if not self.age_identity:
-            raise ValueError("--age-identity is required")
-        if not self.model_gateway_api_key:
-            raise ValueError("--model-gateway-api-key is required")
+            raise ValueError("AGE identity is required")
+        if not self.llm_api_key:
+            raise ValueError("LLM API key is required")
+        if not self.pg_password:
+            raise ValueError("Postgres password is required")
+        if not self.object_store_secret_key:
+            raise ValueError("Object-store secret key is required")
 
 
 def normalize_age_identity(value: str) -> str:
     """Return the AGE_IDENTITY value in the runtime's expected form.
 
     Accepts a raw armored key, an existing `file:`-prefixed path, or a bare
-    filesystem path — the latter is rewritten to `file:<path>` to match the
-    convention services already use (see shared/lib/config.py).
+    filesystem path. A path is read into the generated bootstrap artifact:
+    a host filesystem path cannot be resolved inside a Compose or Kubernetes
+    container.
     """
     value = value.strip()
-    if not value or value.startswith("file:") or value.startswith("AGE-SECRET-KEY-"):
+    if not value or value.startswith("AGE-SECRET-KEY-"):
         return value
-    if Path(value).expanduser().exists():
-        return f"file:{Path(value).expanduser()}"
+    path_value = value.removeprefix("file:")
+    key_path = Path(path_value).expanduser()
+    if key_path.is_file():
+        return key_path.read_text(encoding="utf-8").strip()
     return value
 
 
@@ -90,7 +94,10 @@ def build_bootstrap_env(config: BootstrapConfig) -> dict[str, str]:
     """Return the bootstrap KEY=VALUE env mapping for the chosen target/source."""
     env: dict[str, str] = {
         "AGE_IDENTITY": normalize_age_identity(config.age_identity),
-        "MODEL_GATEWAY_API_KEY": config.model_gateway_api_key,
+        "LLM_API_KEY": config.llm_api_key,
+        "PG_PASSWORD": config.pg_password,
+        "OBJECT_STORE_SECRET_KEY": config.object_store_secret_key,
+        "WORKFLOW_REPO_SOURCE": config.source,
     }
     if config.source == "remote":
         env["WORKFLOW_REPO_URL"] = config.repo_url
@@ -99,11 +106,18 @@ def build_bootstrap_env(config: BootstrapConfig) -> dict[str, str]:
             env["WORKFLOW_REPO_PAT"] = config.repo_pat
     else:
         local_path = str(Path(config.local_path).expanduser())
+        if config.repo_url:
+            env["WORKFLOW_REPO_URL"] = config.repo_url
+        if config.repo_pat:
+            env["WORKFLOW_REPO_PAT"] = config.repo_pat
         if config.target == "compose":
             env["HOST_WORKFLOW_REPO_PATH"] = local_path
             env["HOST_PLATFORM_CONFIG_FILE"] = str(Path(local_path) / "platform-config.yaml")
+            env["WORKFLOW_COMPOSE_ENV_FILE"] = str(Path(local_path) / "deploy" / "compose.env")
         else:
             env["WORKFLOW_REPO_PATHS"] = local_path
+    if config.target == "kubernetes":
+        env["KUBERNETES_NAMESPACE"] = config.namespace
     return env
 
 
@@ -166,7 +180,11 @@ def write_artifact(config: BootstrapConfig, *, output_dir: Path = REPO_ROOT) -> 
 
     path = output_dir / "dist" / "bootstrap" / ("k8s-secret.sh" if config.target == "kubernetes" else "gcp-secrets.sh")
     path.parent.mkdir(parents=True, exist_ok=True)
-    content = render_k8s_secret_script(env) if config.target == "kubernetes" else render_gcp_secrets_script(env)
+    content = (
+        render_k8s_secret_script(env, namespace=config.namespace)
+        if config.target == "kubernetes"
+        else render_gcp_secrets_script(env)
+    )
     path.write_text(content, encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IEXEC)
     return path
@@ -179,65 +197,48 @@ def _prompt(label: str, *, default: str = "", secret: bool = False) -> str:
     return value or default
 
 
-def gather_config_interactively(args: argparse.Namespace) -> BootstrapConfig:
-    target = args.target or _prompt("Deployment target (compose/kubernetes/gcp)", default="compose")
+def gather_config_interactively() -> BootstrapConfig:
+    target = _prompt("Deployment target (compose/kubernetes/gcp)", default="compose")
     default_source = "local" if target == "compose" else "remote"
-    source = args.source or _prompt("Workflow source (remote/local)", default=default_source)
+    source = _prompt("Workflow source (remote/local)", default=default_source)
 
-    repo_url, repo_ref, repo_pat, local_path = args.repo_url, args.repo_ref, args.repo_pat, args.local_path
-    if source == "remote" and not repo_url:
+    repo_url = ""
+    repo_ref = ""
+    repo_pat = ""
+    local_path = ""
+    if source == "remote":
         repo_url = _prompt("Workflow repo URL")
-        repo_ref = repo_ref or _prompt("Workflow repo ref (tag or SHA)", default="main")
-        repo_pat = repo_pat or _prompt("Workflow repo PAT (blank for public repos)", secret=True)
-    elif source == "local" and not local_path:
+        repo_ref = _prompt("Workflow repo ref (tag or SHA)", default="main")
+        repo_pat = _prompt("Workflow repo PAT (blank for public repos)", secret=True)
+    elif source == "local":
         local_path = _prompt("Local workflow-repo checkout path")
+        repo_url = _prompt("Workflow GitHub URL (for version lookup and reflection PRs; blank to disable)")
+        repo_pat = _prompt("Workflow repo PAT (read plus PR creation; blank for public read-only repos)", secret=True)
 
-    age_identity = args.age_identity or _prompt("AGE identity (inline key or path to key.txt)", secret=True)
-    model_gateway_api_key = args.model_gateway_api_key or _prompt("Model gateway API key", secret=True)
+    namespace = _prompt("Kubernetes namespace", default="default") if target == "kubernetes" else "default"
+
+    age_identity = _prompt("AGE identity (inline key or path to key.txt)", secret=True)
+    llm_api_key = _prompt("LLM API key", secret=True)
+    pg_password = _prompt("Postgres password", secret=True)
+    object_store_secret_key = _prompt("Object-store secret key", secret=True)
 
     return BootstrapConfig(
         target=target,
         source=source,
-        repo_url=repo_url or "",
-        repo_ref=repo_ref or "",
-        repo_pat=repo_pat or "",
-        local_path=local_path or "",
-        age_identity=age_identity or "",
-        model_gateway_api_key=model_gateway_api_key or "",
+        repo_url=repo_url,
+        repo_ref=repo_ref,
+        repo_pat=repo_pat,
+        local_path=local_path,
+        age_identity=age_identity,
+        llm_api_key=llm_api_key,
+        pg_password=pg_password,
+        object_store_secret_key=object_store_secret_key,
+        namespace=namespace,
     )
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--target", choices=VALID_TARGETS, default=os.environ.get("BOOTSTRAP_TARGET", ""))
-    parser.add_argument("--source", choices=VALID_SOURCES, default=os.environ.get("BOOTSTRAP_SOURCE", ""))
-    parser.add_argument("--repo-url", default=os.environ.get("WORKFLOW_REPO_URL", ""))
-    parser.add_argument("--repo-ref", default=os.environ.get("WORKFLOW_REPO_REF", "main"))
-    parser.add_argument("--repo-pat", default=os.environ.get("WORKFLOW_REPO_PAT", ""))
-    parser.add_argument("--local-path", default=os.environ.get("WORKFLOW_REPO_LOCAL_CHECKOUT", ""))
-    parser.add_argument("--age-identity", default=os.environ.get("AGE_IDENTITY", ""))
-    parser.add_argument("--model-gateway-api-key", default=os.environ.get("MODEL_GATEWAY_API_KEY", ""))
-    parser.add_argument("--non-interactive", action="store_true", help="Fail on missing values instead of prompting")
-    parser.add_argument("--output-dir", type=Path, default=REPO_ROOT, help="Where to write the generated artifact")
-    return parser.parse_args(argv)
-
-
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
-
-    if args.non_interactive:
-        config = BootstrapConfig(
-            target=args.target,
-            source=args.source,
-            repo_url=args.repo_url,
-            repo_ref=args.repo_ref,
-            repo_pat=args.repo_pat,
-            local_path=args.local_path,
-            age_identity=args.age_identity,
-            model_gateway_api_key=args.model_gateway_api_key,
-        )
-    else:
-        config = gather_config_interactively(args)
+def main() -> int:
+    config = gather_config_interactively()
 
     try:
         config.validate()
@@ -245,10 +246,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    path = write_artifact(config, output_dir=args.output_dir)
+    path = write_artifact(config)
     print(f"Wrote bootstrap artifact: {path}")
     if config.target == "compose":
-        print("Run: docker compose -f deploy/docker-compose.yml --env-file compose.env up -d")
+        print("Run: make up-auto")
     else:
         print(f"Run {path} to create the {config.target} secret, then deploy as usual.")
     return 0

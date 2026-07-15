@@ -2,11 +2,55 @@ nameOverride: ""
 fullnameOverride: ""
 
 imagePullPolicy: IfNotPresent
+imagePullSecrets: []
 
 platformConfig:
   # One of existingSecret or existingConfigMap should provide platform-config.yaml.
   existingSecret: ""
   existingConfigMap: ""
+
+bootstrap:
+  # Secret holding deployment-only values such as AGE_IDENTITY,
+  # LLM_API_KEY, PG_PASSWORD, and OBJECT_STORE_SECRET_KEY.
+  # Its contents are injected into platform workloads via envFrom.
+  existingSecret: ""
+
+# Non-secret deployment overrides. These win over platform-config.yaml values,
+# and are used when connecting to externally managed infrastructure.
+platformEnv: {}
+
+# Optional in-cluster stateful dependencies. All are disabled by default; set
+# them to true in the workflow repo's k8s-values.yaml to run the local-stack
+# equivalents in Kubernetes.
+infrastructure:
+  postgres:
+    enabled: false
+    image: pgvector/pgvector:pg16
+    database: agentic_ops
+    user: agentic_ops
+    storageClass: ""
+    storageSize: 20Gi
+  objectStore:
+    enabled: false
+    image: minio/minio:latest
+    clientImage: minio/mc:latest
+    accessKey: agentic_ops
+    buckets:
+      - agent-memory
+      - agentic-ops-bundles
+    storageClass: ""
+    storageSize: 20Gi
+  hindsight:
+    enabled: false
+    image: ghcr.io/vectorize-io/hindsight:latest
+    llmProvider: openai
+    llmBaseUrl: ""
+    llmModel: ""
+    embeddingsProvider: openai
+    embeddingsBaseUrl: ""
+    embeddingsModel: ""
+    storageClass: ""
+    storageSize: 10Gi
 
 workflowRepo:
   mountPath: /app/workflow-repos/default

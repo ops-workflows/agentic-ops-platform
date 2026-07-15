@@ -1,6 +1,12 @@
 # Agentic Ops — Docker Compose
 # Shared services for the workflow-oriented platform deployment
 
+x-platform-bootstrap-env: &platform-bootstrap-env
+  AGE_IDENTITY: ${AGE_IDENTITY:?Run make bootstrap to generate compose.env with AGE_IDENTITY}
+  LLM_API_KEY: ${LLM_API_KEY:?Run make bootstrap to generate compose.env with LLM_API_KEY}
+  PG_PASSWORD: ${PG_PASSWORD:-localdev-postgres-password}
+  OBJECT_STORE_SECRET_KEY: ${OBJECT_STORE_SECRET_KEY:-localdev-minio-password}
+
 services:
   # ─── Shared Infrastructure ─────────────────────────────────────────
 
@@ -11,13 +17,13 @@ services:
       - pgdata:/var/lib/postgresql/data
       - ../shared/lib/init_db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     environment:
-      POSTGRES_DB: agentic_ops
-      POSTGRES_USER: agentic_ops
+      POSTGRES_DB: ${PG_DB:-agentic_ops}
+      POSTGRES_USER: ${PG_USER:-agentic_ops}
       POSTGRES_PASSWORD: ${PG_PASSWORD:-localdev-postgres-password}
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U agentic_ops -d agentic_ops"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -68,9 +74,9 @@ services:
     environment:
       HINDSIGHT_API_LLM_PROVIDER: ${HINDSIGHT_API_LLM_PROVIDER:-openai}
       HINDSIGHT_API_LLM_BASE_URL: ${HINDSIGHT_API_LLM_BASE_URL:-http://model-gateway:1235/v1}
-      HINDSIGHT_API_LLM_API_KEY: ${HINDSIGHT_API_LLM_API_KEY:-localdev-key}
+      HINDSIGHT_API_LLM_API_KEY: ${LLM_API_KEY:-localdev-key}
       HINDSIGHT_API_LLM_MODEL: ${HINDSIGHT_API_LLM_MODEL:-example-model}
-      HINDSIGHT_API_DATABASE_URL: postgresql://agentic_ops:${PG_PASSWORD:-localdev-postgres-password}@postgres:5432/agentic_ops
+      HINDSIGHT_API_DATABASE_URL: postgresql://${PG_USER:-agentic_ops}:${PG_PASSWORD:-localdev-postgres-password}@postgres:5432/${PG_DB:-agentic_ops}
       HINDSIGHT_API_DATABASE_SCHEMA: hindsight
       HINDSIGHT_API_VECTOR_EXTENSION: pgvector
       HINDSIGHT_API_RUN_MIGRATIONS_ON_STARTUP: "true"
@@ -78,7 +84,7 @@ services:
       HINDSIGHT_API_LAZY_RERANKER: "true"
       HINDSIGHT_API_EMBEDDINGS_PROVIDER: ${HINDSIGHT_API_EMBEDDINGS_PROVIDER:-openai}
       HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL:-http://model-gateway:1235/v1}
-      HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY:-localdev-key}
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY: ${LLM_API_KEY:-localdev-key}
       HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL: ${HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL:-example-embedding-model}
       HINDSIGHT_API_FILE_STORAGE_TYPE: native
     volumes:
@@ -112,7 +118,7 @@ services:
     profiles: ["model-gateway"]
     restart: unless-stopped
     environment:
-      MODEL_GATEWAY_API_KEY: ${MODEL_GATEWAY_API_KEY:-localdev-key}
+      LLM_API_KEY: ${LLM_API_KEY:-localdev-key}
     volumes:
       - ${HOST_LITELLM_CONFIG_FILE:-../examples/workflow-repo/litellm.config.example.yaml}:/app/config.yaml:ro
     networks:
@@ -126,12 +132,11 @@ services:
       dockerfile: gateway/Dockerfile
     restart: unless-stopped
     environment:
-      AGE_IDENTITY: file:/run/secrets/age_identity
+      <<: *platform-bootstrap-env
       PLATFORM_CONFIG_FILE: /app/platform-config.yaml
       WORKFLOW_ROOT: /app/workflows
       WORKFLOW_REPO_PATHS: ${WORKFLOW_REPO_PATHS:-/app/workflows}
     volumes:
-      - ../key.txt:/run/secrets/age_identity:ro
       - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
       - ${HOST_WORKFLOW_REPO_PATH:-../examples/workflow-repo/workflows}:/app/workflows:ro
       - ../connectors:/app/connectors:ro
@@ -153,8 +158,8 @@ services:
       dockerfile: session-manager/Dockerfile
     restart: unless-stopped
     environment:
+      <<: *platform-bootstrap-env
       POLL_INTERVAL_SEC: ${POLL_INTERVAL_SEC:-2}
-      AGE_IDENTITY: file:/run/secrets/age_identity
       PLATFORM_CONFIG_FILE: /app/platform-config.yaml
       WORKFLOW_ROOT: /app/workflows
       WORKFLOW_REPO_PATHS: ${WORKFLOW_REPO_PATHS:-/app/workflows}
@@ -162,9 +167,7 @@ services:
       HOST_REPO_ROOT: ${PWD}
       DOCKER_HOST: unix:///var/run/docker.sock
       GATEWAY_EVENT_URL: http://gateway:8080/events
-      MODEL_GATEWAY_API_KEY: ${MODEL_GATEWAY_API_KEY:-localdev-key}
     volumes:
-      - ../key.txt:/run/secrets/age_identity:ro
       - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
       - ${HOST_WORKFLOW_REPO_PATH:-../examples/workflow-repo/workflows}:/app/workflows:ro
       - ${RUNTIME_BUNDLE_ROOT:-/tmp/agentic-ops-runtime-bundles}:${RUNTIME_BUNDLE_ROOT:-/tmp/agentic-ops-runtime-bundles}
@@ -201,11 +204,11 @@ services:
     command: ["python", "-m", "uvicorn", "mcps.core.mcp_message:app", "--host", "0.0.0.0", "--port", "8100"]
     restart: unless-stopped
     environment:
+      <<: *platform-bootstrap-env
       GATEWAY_URL: http://gateway:8080
-      AGE_IDENTITY: file:/run/secrets/age_identity
-      PLATFORM_CONFIG_FILE: ${PLATFORM_CONFIG_FILE:-/app/platform-config.yaml}
+      PLATFORM_CONFIG_FILE: /app/platform-config.yaml
     volumes:
-      - ../key.txt:/run/secrets/age_identity:ro
+      - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
     ports:
       - "8100:8100"
     networks:
@@ -218,11 +221,10 @@ services:
     command: ["python", "-m", "uvicorn", "mcps.core.mcp_memory:app", "--host", "0.0.0.0", "--port", "8103"]
     restart: unless-stopped
     environment:
-      HINDSIGHT_URL: http://hindsight:8888
-      AGE_IDENTITY: file:/run/secrets/age_identity
-      PLATFORM_CONFIG_FILE: ${PLATFORM_CONFIG_FILE:-/app/platform-config.yaml}
+      <<: *platform-bootstrap-env
+      PLATFORM_CONFIG_FILE: /app/platform-config.yaml
     volumes:
-      - ../key.txt:/run/secrets/age_identity:ro
+      - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
     depends_on:
       - hindsight
     ports:
@@ -237,11 +239,11 @@ services:
     command: ["python", "-m", "uvicorn", "mcps.core.mcp_platform:app", "--host", "0.0.0.0", "--port", "8105"]
     restart: unless-stopped
     environment:
+      <<: *platform-bootstrap-env
       GATEWAY_URL: http://gateway:8080
-      AGE_IDENTITY: file:/run/secrets/age_identity
-      PLATFORM_CONFIG_FILE: ${PLATFORM_CONFIG_FILE:-/app/platform-config.yaml}
+      PLATFORM_CONFIG_FILE: /app/platform-config.yaml
     volumes:
-      - ../key.txt:/run/secrets/age_identity:ro
+      - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
     depends_on:
       - gateway
     ports:
@@ -259,10 +261,10 @@ services:
     profiles: ["salesforce", "mcps"]
     restart: unless-stopped
     environment:
-      AGE_IDENTITY: file:/run/secrets/age_identity
-      PLATFORM_CONFIG_FILE: ${PLATFORM_CONFIG_FILE:-/app/platform-config.yaml}
+      <<: *platform-bootstrap-env
+      PLATFORM_CONFIG_FILE: /app/platform-config.yaml
     volumes:
-      - ../key.txt:/run/secrets/age_identity:ro
+      - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
     ports:
       - "8102:8102"
     networks:
@@ -275,6 +277,11 @@ services:
     command: ["python", "-m", "uvicorn", "mcps.integrations.mcp_splunk:app", "--host", "0.0.0.0", "--port", "8101"]
     profiles: ["splunk", "incident", "mcps"]
     restart: unless-stopped
+    environment:
+      <<: *platform-bootstrap-env
+      PLATFORM_CONFIG_FILE: /app/platform-config.yaml
+    volumes:
+      - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
     ports:
       - "8101:8101"
     networks:
@@ -287,6 +294,11 @@ services:
     command: ["python", "-m", "uvicorn", "mcps.integrations.mcp_cloudwatch:app", "--host", "0.0.0.0", "--port", "8104"]
     profiles: ["cloudwatch", "incident", "mcps"]
     restart: unless-stopped
+    environment:
+      <<: *platform-bootstrap-env
+      PLATFORM_CONFIG_FILE: /app/platform-config.yaml
+    volumes:
+      - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
     ports:
       - "8104:8104"
     networks:
@@ -300,10 +312,10 @@ services:
     profiles: ["jira", "mcps"]
     restart: unless-stopped
     environment:
-      AGE_IDENTITY: file:/run/secrets/age_identity
-      PLATFORM_CONFIG_FILE: ${PLATFORM_CONFIG_FILE:-/app/platform-config.yaml}
+      <<: *platform-bootstrap-env
+      PLATFORM_CONFIG_FILE: /app/platform-config.yaml
     volumes:
-      - ../key.txt:/run/secrets/age_identity:ro
+      - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
     ports:
       - "8106:8106"
     networks:
@@ -318,11 +330,11 @@ services:
     profiles: ["servicenow", "connectors"]
     restart: unless-stopped
     environment:
-      AGE_IDENTITY: file:/run/secrets/age_identity
-      PLATFORM_CONFIG_FILE: ${PLATFORM_CONFIG_FILE:-/app/platform-config.yaml}
+      <<: *platform-bootstrap-env
+      PLATFORM_CONFIG_FILE: /app/platform-config.yaml
       CONNECTOR_INSTANCE_ID: ${SERVICENOW_CONNECTOR_INSTANCE_ID:-}
     volumes:
-      - ../key.txt:/run/secrets/age_identity:ro
+      - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
       - ../shared:/app/shared:ro
     depends_on:
       postgres:
@@ -337,11 +349,10 @@ services:
     profiles: ["gcp-pubsub", "connectors"]
     restart: unless-stopped
     environment:
-      AGE_IDENTITY: file:/run/secrets/age_identity
-      PLATFORM_CONFIG_FILE: ${PLATFORM_CONFIG_FILE:-/app/platform-config.yaml}
-      CONNECTOR_INSTANCE_ID: ${GCP_PUBSUB_CONNECTOR_INSTANCE_ID:-}
+      <<: *platform-bootstrap-env
+      PLATFORM_CONFIG_FILE: /app/platform-config.yaml
     volumes:
-      - ../key.txt:/run/secrets/age_identity:ro
+      - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
       - ../shared:/app/shared:ro
     depends_on:
       postgres:

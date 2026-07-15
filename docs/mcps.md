@@ -66,9 +66,11 @@ rename.
 
 ### `platform` — platform self-service
 
-No `mcps.config` fields. `propose_skill_update` requires `GITHUB_TOKEN` and
-`GITHUB_REPO` and only accepts paths under `workflows/` or `skills/` with a
-`.md` extension.
+No `mcps.config` fields. `propose_skill_update` reuses the bootstrap
+`WORKFLOW_REPO_URL` and `WORKFLOW_REPO_PAT`, derives the GitHub repository from
+that URL, and opens a PR only in that workflow repository. It accepts only
+workflow-local instructions/skills and workflow-repo shared `skills/*/SKILL.md`;
+platform-core files are read-only.
 
 | Tool | Purpose |
 | --- | --- |

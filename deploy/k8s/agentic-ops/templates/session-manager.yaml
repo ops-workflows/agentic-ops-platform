@@ -14,6 +14,7 @@ spec:
       labels:
         app.kubernetes.io/component: session-manager
     spec:
+      {{- include "agentic-ops.imagePullSecrets" . | nindent 6 }}
       serviceAccountName: {{ include "agentic-ops.serviceAccountName" . }}
       containers:
         - name: session-manager
@@ -27,6 +28,10 @@ spec:
               value: {{ .Values.runtimeBundles.uriTemplate | quote }}
             - name: RUNTIME_BUNDLE_ROOT
               value: {{ .Values.runtimeBundles.root | quote }}
+          {{- if .Values.bootstrap.existingSecret }}
+          envFrom:
+            {{- include "agentic-ops.bootstrapEnvFrom" . | nindent 12 }}
+          {{- end }}
           volumeMounts:
             {{- include "agentic-ops.commonVolumeMounts" . | nindent 12 }}
       volumes:

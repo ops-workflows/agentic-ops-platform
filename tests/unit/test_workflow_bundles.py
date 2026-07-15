@@ -48,6 +48,9 @@ def test_build_workflow_bundle_merges_core_team_and_workflow_assets(
     assert result.manifest["workflow"]["name"] == "platform-test"
     assert result.manifest["repo"]["commit"] == "abc123"
     assert result.manifest["created_at"] == "2026-01-02T03:04:05Z"
+    assert result.manifest["assets"]["sources"]["skills/message-communication/SKILL.md"] == "team"
+    assert result.manifest["assets"]["sources"]["skills/reflect/SKILL.md"] == "core"
+    assert result.manifest["assets"]["sources"]["agents/test-coordinator.md"] == "workflow"
     assert any(
         item["path"] == "skills/message-communication/SKILL.md" for item in result.manifest["assets"]["shadowed"]
     )

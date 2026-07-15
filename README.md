@@ -22,7 +22,8 @@ live in your own workflow repository; this repo is the platform they run on.
 - **Source connectors and task queue** — pluggable ingestion adapters (Pub/Sub,
   ServiceNow polling, ...) that turn external events into queued tasks, with
   alert coalescing.
-- **Provider-neutral message bus** — Mattermost today, with Slack support.
+- **Message bus adapters** — Mattermost supports inbound webhooks, approvals,
+  posting, and reply waiting; Slack supports posting and reply waiting.
 - **Hindsight memory integration** — long-term recall and pattern reflection
   across past incidents, plus per-agent memory volumes backed up to object
   storage.

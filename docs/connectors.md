@@ -10,10 +10,11 @@ is a small, generic service that reads from one external source and calls
   `gcp-pubsub-connector`) is a generic Docker image with no built-in
   knowledge of any specific subscription, workflow, or prompt. Behavior comes
   entirely from an **instance** — an entry under `connectors.instances` in
-  `platform-config.yaml` — selected at container start by the
-  `CONNECTOR_INSTANCE_ID` env var. Running the same image against two
-  instances (e.g. two subscriptions feeding two workflows) means running two
-  containers with different `CONNECTOR_INSTANCE_ID` values, not two images.
+  `platform-config.yaml`. A shipped generic connector automatically selects
+  its single enabled instance of the matching type. Running the same image
+  against two instances (e.g. two subscriptions feeding two workflows) means
+  running two containers with different `CONNECTOR_INSTANCE_ID` values, not
+  two images.
 - **`${VAR}` expansion.** Instance config values can reference
   `platform-config.yaml`'s `config:` values, decrypted `secrets:`, or the
   process environment via `${VAR}` placeholders, expanded at load time
@@ -103,6 +104,9 @@ Notes: messages are decoded as UTF-8 JSON (non-JSON still creates a task with
 `payload_text`); a failed task creation `nack`s the message for redelivery.
 Requires GCP application default credentials reachable by
 `google-cloud-pubsub` (and `google-cloud-storage` if `gcs_payload` is used).
+On Kubernetes, prefer workload identity. When that is unavailable, put an
+age-encrypted `GCP_SERVICE_ACCOUNT_JSON` in `platform-config.yaml`; the
+connector decrypts it and exposes it as a temporary ADC credential file.
 
 ### `servicenow-connector`
 

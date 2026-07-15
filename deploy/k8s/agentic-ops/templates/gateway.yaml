@@ -14,6 +14,7 @@ spec:
       labels:
         app.kubernetes.io/component: gateway
     spec:
+      {{- include "agentic-ops.imagePullSecrets" . | nindent 6 }}
       serviceAccountName: {{ include "agentic-ops.serviceAccountName" . }}
       containers:
         - name: gateway
@@ -24,6 +25,10 @@ spec:
               containerPort: {{ .Values.gateway.port }}
           env:
             {{- include "agentic-ops.commonEnv" . | nindent 12 }}
+          {{- if .Values.bootstrap.existingSecret }}
+          envFrom:
+            {{- include "agentic-ops.bootstrapEnvFrom" . | nindent 12 }}
+          {{- end }}
           volumeMounts:
             {{- include "agentic-ops.commonVolumeMounts" . | nindent 12 }}
       volumes:

@@ -59,7 +59,7 @@ def _sync_configured_workflow_repo(*, ref_override: str | None = None, raise_on_
     them.
     """
     repo_url = settings.workflow_repo_url.strip()
-    if not repo_url:
+    if not repo_url or settings.workflow_repo_source.strip().lower() == "local":
         return None
 
     git_binary = shutil.which("git")

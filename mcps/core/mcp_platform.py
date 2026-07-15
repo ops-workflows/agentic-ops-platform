@@ -17,30 +17,40 @@ from mcps.common import bootstrap_platform_env, get_env
 bootstrap_platform_env()
 
 GATEWAY_URL = get_env("GATEWAY_URL", "http://gateway:8080")
-GITHUB_TOKEN = get_env("GITHUB_TOKEN", "")
-GITHUB_REPO = get_env("GITHUB_REPO", "")
+WORKFLOW_REPO_URL = get_env("WORKFLOW_REPO_URL", "")
+WORKFLOW_REPO_PAT = get_env("WORKFLOW_REPO_PAT", "")
 GITHUB_API = "https://api.github.com"
-ALLOWED_PATH_PREFIXES = ("workflows/", "skills/")
-ALLOWED_EXTENSIONS = (".md",)
+GITHUB_URL_PATTERN = re.compile(r"^(?:https://github\.com/|git@github\.com:)([^/]+)/([^/]+?)(?:\.git)?/?$")
 
 mcp = FastMCP("Platform MCP Server")
 
 
 def _github_headers() -> dict[str, str]:
     return {
-        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Authorization": f"Bearer {WORKFLOW_REPO_PAT}",
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
 
+def _workflow_github_repo() -> str:
+    match = GITHUB_URL_PATTERN.fullmatch(WORKFLOW_REPO_URL.strip())
+    if not match:
+        return ""
+    return f"{match.group(1)}/{match.group(2)}"
+
+
 def _validate_skill_path(file_path: str) -> None:
     if ".." in file_path or file_path.startswith("/"):
         raise ValueError("Path must be relative and must not contain '..'")
-    if not any(file_path.startswith(prefix) for prefix in ALLOWED_PATH_PREFIXES):
-        raise ValueError(f"Updates are only allowed under: {', '.join(ALLOWED_PATH_PREFIXES)}")
-    if not any(file_path.endswith(ext) for ext in ALLOWED_EXTENSIONS):
-        raise ValueError(f"Only these file types can be updated: {', '.join(ALLOWED_EXTENSIONS)}")
+    private_shared_skill = re.fullmatch(r"skills/[^/]+/SKILL\.md", file_path)
+    workflow_instruction = re.fullmatch(r"workflows/[^/]+/(?:CLAUDE\.md|agents/[^/]+\.md)", file_path)
+    workflow_skill = re.fullmatch(r"workflows/[^/]+/skills/[^/]+/SKILL\.md", file_path)
+    if not (private_shared_skill or workflow_instruction or workflow_skill):
+        raise ValueError(
+            "Updates are limited to workflow instructions/skills or workflow-repo shared skills; "
+            "platform-core files are read-only"
+        )
 
 
 @mcp.tool(annotations={"openWorldHint": True})
@@ -91,10 +101,11 @@ def propose_skill_update(
 ) -> dict[str, Any]:
     """Use this during reflection to propose a reusable skill or agent update as a GitHub PR."""
     _validate_skill_path(file_path)
-    if not GITHUB_TOKEN or not GITHUB_REPO:
-        return {"error": "GITHUB_TOKEN and GITHUB_REPO must be configured"}
+    github_repo = _workflow_github_repo()
+    if not WORKFLOW_REPO_PAT or not github_repo:
+        return {"error": "A GitHub WORKFLOW_REPO_URL and WORKFLOW_REPO_PAT are required for PR proposals"}
 
-    repo_api = f"{GITHUB_API}/repos/{GITHUB_REPO}"
+    repo_api = f"{GITHUB_API}/repos/{github_repo}"
     github_headers = _github_headers()
 
     with httpx.Client(timeout=30.0) as client:

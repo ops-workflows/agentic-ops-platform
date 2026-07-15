@@ -58,6 +58,11 @@ from the `X-Task-Workflow` request header; a workflow without a mapping falls
 back to the `incident-rca` (business) and `workflow-learning` (learning)
 defaults.
 
+`memory.backend: hindsight` identifies the only supported long-term-memory
+backend today. It does not replace `HINDSIGHT_URL`: gateway health/API calls,
+the session manager's runtime environment, hooks, and `mcp-memory` all use
+that URL to reach the Hindsight service.
+
 ## Per-agent project memory
 
 This is Claude Code's native project memory, persisted across ephemeral

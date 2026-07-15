@@ -146,6 +146,10 @@ assets:
   core_sha: "sha256:..."
   team_sha: "sha256:..."
   workflow_sha: "sha256:..."
+  sources:
+    skills/shared-triage/SKILL.md: team
+    skills/reflect/SKILL.md: core
+    agents/coordinator.md: workflow
   shadowed:
     - {path: "skills/foo/SKILL.md", by: "workflow"}
 created_at: "2025-01-15T10:30:00Z"
@@ -153,6 +157,12 @@ created_at: "2025-01-15T10:30:00Z"
 
 `platform_version` is what [the compatibility check](deployment.md#compatibility-policy)
 compares against the running platform at sync time.
+
+`assets.sources` records the final owner of each merged file: `core` for the
+public platform, `team` for workflow-repo shared content, and `workflow` for
+workflow-local content. Reflection uses this map to consider only `team` and
+`workflow` instructions/skills; it never evaluates public `core` skills for
+optimization.
 
 ## Building a bundle manually
 

@@ -7,39 +7,33 @@ the **layer 1** bootstrap artifact described in
 [Configuration](configuration.md) — it never reads or writes the workflow
 repo's `platform-config.yaml`.
 
-Prompts (each has a `--flag` and an env var override, so the same script runs
-non-interactively in CI):
+Prompts:
 
-1. **Deployment target** — `compose`, `kubernetes`, or `gcp` (`--target` /
-   `BOOTSTRAP_TARGET`).
+1. **Deployment target** — `compose`, `kubernetes`, or `gcp`.
 2. **Workflow source** — `remote` (git URL + ref + optional PAT) or `local`
-   (a filesystem checkout path) (`--source` / `BOOTSTRAP_SOURCE`). `compose`
+   (a filesystem checkout path). `compose`
    only supports `local` today (it bind-mounts a checkout); `kubernetes` and
    `gcp` expect `remote`.
-3. **Repo URL/ref/PAT** (remote) or **local checkout path** (local).
-4. **AGE identity** (`--age-identity` / `AGE_IDENTITY`) — an armored
-   `AGE-SECRET-KEY-...` string or a path to a key file (normalized to
-   `file:<path>`).
-5. **Model gateway API key** (`--model-gateway-api-key` /
-   `MODEL_GATEWAY_API_KEY`).
+3. **Repo URL/ref/PAT** (remote) or **local checkout path** plus optional
+   GitHub URL/PAT (local). The local checkout remains the sync source; the
+   GitHub values enable version lookup and reflection PRs for that same repo.
+   Kubernetes bootstrap also prompts for the target namespace; use the same
+   namespace with `helm upgrade`.
+4. **AGE identity** — an armored
+   `AGE-SECRET-KEY-...` string or a path to a key file. A path is read into
+   the generated secret artifact so it works inside containers.
+5. **LLM API key** — one
+   key shared by runtime model profiles and Hindsight's LLM/embeddings clients.
+6. **Postgres password** and **object-store secret key** —
+   direct-container secrets required by Compose infrastructure.
 
 Generated artifact per target (none of these are committed):
 
 | Target | Artifact | Apply |
 | --- | --- | --- |
-| `compose` | `compose.env` | `docker compose -f deploy/docker-compose.yml --env-file compose.env up -d` |
+| `compose` | `compose.env` | `make up-auto` |
 | `kubernetes` | `dist/bootstrap/k8s-secret.sh` | run the script to create/update a `Secret` |
 | `gcp` | `dist/bootstrap/gcp-secrets.sh` | run the script to create/update Secret Manager entries |
-
-Non-interactive example:
-
-```sh
-python scripts/bootstrap.py --non-interactive \
-  --target kubernetes --source remote \
-  --repo-url https://github.com/org/workflow-repo --repo-ref v1.2.0 \
-  --age-identity "$(cat age-key.txt)" \
-  --model-gateway-api-key "$ANTHROPIC_API_KEY"
-```
 
 ## Which services actually start
 
@@ -58,6 +52,12 @@ make up-auto
 # Computed COMPOSE_PROFILES=gcp-pubsub,model-gateway,salesforce
 ```
 
+The workflow repo owns a committed `deploy/compose.env` with non-secret
+infrastructure coordinates. `make bootstrap` writes the separate, gitignored
+root `compose.env` with bootstrap secrets and its path to that workflow file.
+The Makefile loads both automatically (workflow file first, generated secrets
+second), so a workflow repo using shipped services needs no Compose override.
+
 Kubernetes (Helm) and Cloud Run do **not** have an equivalent automatic
 derivation today:
 
@@ -72,7 +72,8 @@ derivation today:
 
 ## Local development (uncommitted working tree)
 
-Use `--source local` so `WORKFLOW_REPO_PATHS` (or, for compose,
+In the bootstrap prompt, choose the `local` workflow source so
+`WORKFLOW_REPO_PATHS` (or, for compose,
 `HOST_WORKFLOW_REPO_PATH`/`HOST_PLATFORM_CONFIG_FILE`) points at a plain
 filesystem checkout. **Sync now** rebuilds the bundle from whatever is
 currently on disk — no git fetch, no commit, no pinned tag required. Object
@@ -109,15 +110,18 @@ storage is optional in this mode; a local `RUNTIME_BUNDLE_ROOT` works fine.
   and `RUNTIME_BUNDLE_ROOT`. Optional profiles: `model-gateway`, `local-llm`,
   `salesforce`, `splunk`, `cloudwatch`, `jira`, `servicenow`, `gcp-pubsub`.
 - `deploy/k8s/agentic-ops` — Kubernetes (Helm) chart; instance values select the
-  platform-config secret/configmap, workflow-repo PVC, bundle URI pattern,
-  and which MCPs/connectors run.
+   platform-config secret/configmap, workflow-repo PVC, bundle URI pattern,
+   bootstrap Secret, and which MCPs/connectors run. Postgres, S3-compatible
+   storage, and Hindsight are external by default; a workflow repo can opt into
+   chart-managed pgvector Postgres, MinIO, and Hindsight through
+   `infrastructure.*.enabled` in its values file.
 - `deploy/gcp/` — thin Cloud Run service/job templates; Cloud SQL,
   Secret Manager, GCS, IAM, and VPC wiring are instance-owned.
 
-Private/customer deployments should add a Compose override (or Helm
-values/Cloud Run env) that sets `WORKFLOW_REPO_PATHS`, points
-`PLATFORM_CONFIG_FILE` at the instance config, and enables the MCPs/connectors
-that instance needs — rather than editing the public base stack.
+Private/customer deployments should commit non-secret Compose/Kubernetes values
+in the workflow repo (`deploy/compose.env`, `deploy/k8s-values.yaml`) and use
+the generated bootstrap artifact for secrets, rather than editing the public
+base stack or adding a Compose override for shipped services.
 
 ## Workflow bundles
 
@@ -159,7 +163,7 @@ one pipeline (`shared/lib/workflow_repo_sync.py::sync_workflow_repo`):
 
 "Update" always means re-syncing to an explicitly pinned ref — never a silent
 pull of `main`. Sync never touches bootstrap secrets (repo URL/PAT,
-`AGE_IDENTITY`, `MODEL_GATEWAY_API_KEY`); changing those means re-running
+`AGE_IDENTITY`, `LLM_API_KEY`); changing those means re-running
 `make bootstrap`.
 
 ### Compatibility policy

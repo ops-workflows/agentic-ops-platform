@@ -19,6 +19,8 @@ spec:
         app.kubernetes.io/component: connector
         app.kubernetes.io/name: {{ $name }}
     spec:
+      {{- include "agentic-ops.imagePullSecrets" $ | nindent 6 }}
+      serviceAccountName: {{ include "agentic-ops.serviceAccountName" $ }}
       containers:
         - name: connector-{{ $name }}
           image: {{ $.Values.images.connector.repository }}:{{ $.Values.images.connector.tag }}
@@ -31,6 +33,10 @@ spec:
             - name: {{ $key }}
               value: {{ $value | quote }}
             {{- end }}
+          {{- if $.Values.bootstrap.existingSecret }}
+          envFrom:
+            {{- include "agentic-ops.bootstrapEnvFrom" $ | nindent 12 }}
+          {{- end }}
           volumeMounts:
             {{- include "agentic-ops.commonVolumeMounts" $ | nindent 12 }}
       volumes:

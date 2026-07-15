@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
 import logging
 import os
 import signal
+import tempfile
 from collections import UserDict
 from typing import Any
 
-from shared.lib.platform_secrets import apply_platform_env_defaults, load_connector_instance
+from shared.lib.platform_secrets import (
+    apply_platform_env_defaults,
+    load_connector_instance,
+    load_enabled_connector_instance,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -43,12 +49,31 @@ def _bootstrap_platform_env() -> None:
 
 def _load_instance_config() -> dict[str, Any]:
     instance_id = os.environ.get("CONNECTOR_INSTANCE_ID", "").strip()
-    if not instance_id:
-        raise RuntimeError("CONNECTOR_INSTANCE_ID must be set to a connectors.instances entry in platform config")
-    config = load_connector_instance(_platform_config_file(), instance_id)
+    if instance_id:
+        config = load_connector_instance(_platform_config_file(), instance_id)
+    else:
+        instance_id, config = load_enabled_connector_instance(_platform_config_file(), "gcp-pubsub")
     if not config:
-        raise RuntimeError(f"Connector instance {instance_id!r} not found in {_platform_config_file()}")
+        raise RuntimeError("Set CONNECTOR_INSTANCE_ID or enable exactly one gcp-pubsub instance in platform config")
     return config
+
+
+def _configure_google_application_credentials() -> None:
+    """Expose an encrypted platform-config service-account secret to Google ADC."""
+    if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+        return
+    service_account_json = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "").strip()
+    if not service_account_json:
+        return
+    try:
+        json.loads(service_account_json)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("GCP_SERVICE_ACCOUNT_JSON must contain valid service-account JSON") from exc
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as credentials_file:
+        credentials_file.write(service_account_json)
+    credentials_path = credentials_file.name
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
+    atexit.register(lambda: os.path.exists(credentials_path) and os.unlink(credentials_path))
 
 
 def _extract_path(data: dict[str, Any], path: str) -> Any:
@@ -193,6 +218,7 @@ def main() -> None:
     signal.signal(signal.SIGINT, _signal_handler)
     start_health_server()
     _bootstrap_platform_env()
+    _configure_google_application_credentials()
     config = _load_instance_config()
     asyncio.run(run_subscriber(config))
 

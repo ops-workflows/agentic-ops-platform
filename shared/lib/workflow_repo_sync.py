@@ -125,7 +125,7 @@ async def _run_sync_pipeline(effective_ref: str | None) -> WorkflowSyncResult:
     import asyncio
 
     def _sync_blocking() -> WorkflowSyncResult:
-        if settings.workflow_repo_url.strip():
+        if settings.workflow_repo_url.strip() and settings.workflow_repo_source.strip().lower() != "local":
             sync_workflow_repo_to_ref(effective_ref)  # raises RuntimeError on failure
 
         packages = discover_workflow_packages()

@@ -5,14 +5,11 @@ encrypted secrets, and adds a `runtime_env:` section for values that should be
 injected into every ephemeral runtime container:
 
         config:
-            GITHUB_REPO: your-org/ai-ops-platform
             MESSAGE_BUS_API_URL: https://message.example.com
         runtime_env:
             ANTHROPIC_MODEL: gemma4:26b
             DISABLE_TELEMETRY: true
         secrets:
-            GITHUB_TOKEN:
-                encrypted: ENC[age,...]
 
 All keys are env-style names so services can reuse their existing settings
 without Docker Compose needing to decrypt or template secret values.
@@ -192,6 +189,31 @@ def load_connector_instances(path: str) -> dict[str, dict[str, Any]]:
 def load_connector_instance(path: str, instance_id: str) -> dict[str, Any]:
     """Return one connector instance definition by id, or an empty dict when absent."""
     return load_connector_instances(path).get(instance_id, {})
+
+
+def load_enabled_connector_instance(path: str, connector_type: str) -> tuple[str, dict[str, Any]]:
+    """Return the single enabled connector instance matching ``connector_type``.
+
+    A deployment may still set ``CONNECTOR_INSTANCE_ID`` to select one instance
+    explicitly. Without it, a generic connector can be configured entirely in
+    ``platform-config.yaml`` when exactly one enabled instance uses its type.
+    """
+    data = _read_platform_file(path)
+    connectors = data.get("connectors")
+    if not isinstance(connectors, dict):
+        return "", {}
+    enabled = connectors.get("enabled")
+    if not isinstance(enabled, list):
+        return "", {}
+    instances = load_connector_instances(path)
+    matches = [
+        (str(instance_id), instances[str(instance_id)])
+        for instance_id in enabled
+        if str(instance_id) in instances and instances[str(instance_id)].get("type") == connector_type
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    return "", {}
 
 
 def _read_platform_file(path: str) -> dict[str, Any]:

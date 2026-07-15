@@ -16,23 +16,17 @@ unless you're adding a *custom* MCP server or connector (see
 
 Run `make bootstrap` in `agentic-ops-platform/` first (see its
 `docs/deployment.md`) to generate `compose.env` with the operator bootstrap
-layer (`AGE_IDENTITY`, `MODEL_GATEWAY_API_KEY`, workflow-repo pointer, pointed
-at your repo's local path). Then from `agentic-ops-platform/`, run:
+layer (`AGE_IDENTITY`, `LLM_API_KEY`, workflow-repo pointer, pointed
+at your repo's local path). Copy [compose.env.example](compose.env.example) to
+your workflow repo as `deploy/compose.env` and set its non-secret values. Then
+from `agentic-ops-platform/`, run:
 
 ```sh
-COMPOSE_PROFILES=model-gateway,salesforce \
-docker compose --env-file compose.env -f deploy/docker-compose.yml up --build
+make up-auto
 ```
 
-Without bootstrap, set the same env vars directly instead:
-
-```sh
-HOST_WORKFLOW_REPO_PATH=/path/to/my-workflow-repo \
-HOST_PLATFORM_CONFIG_FILE=/path/to/my-workflow-repo/platform-config.yaml \
-HOST_LITELLM_CONFIG_FILE=/path/to/my-workflow-repo/litellm.config.yaml \
-COMPOSE_PROFILES=model-gateway,salesforce \
-docker compose -f deploy/docker-compose.yml up --build
-```
+The Makefile loads `deploy/compose.env` first, then the generated root
+`compose.env`, and derives the required profiles from `platform-config.yaml`.
 
 ### Adding your own custom MCP server or connector
 
@@ -63,7 +57,8 @@ Use the public chart with your own values file:
 ```sh
 helm upgrade --install my-workflow-repo \
   ../agentic-ops-platform/deploy/k8s/agentic-ops \
-  -f deploy/k8s-values.yaml
+  -f deploy/k8s-values.yaml \
+  --namespace my-workflow-namespace --create-namespace
 ```
 
 A values file is needed even without any custom service — it's how you set the
@@ -80,3 +75,12 @@ one shared image per component (`images.mcp.repository` /
 build a combined image containing both the public code and your own modules,
 publish it as that image, and reference your module's import path the same
 way `custom-example` does.
+
+`k8s-values.yaml` has two infrastructure modes. Keep all
+`infrastructure.*.enabled` values `false` and set `platformEnv` to use
+operator-provided Postgres, S3-compatible storage, and Hindsight. Or set all
+three to `true` to provision pgvector Postgres, MinIO, and Hindsight in this
+namespace; their credentials still come only from the bootstrap Secret. The
+public example shows both modes. Run `make bootstrap`, select `kubernetes`, and
+enter the same namespace used by Helm so its generated Secret lands in the
+right scope.

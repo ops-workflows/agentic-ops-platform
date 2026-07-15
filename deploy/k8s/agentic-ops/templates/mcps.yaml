@@ -19,6 +19,7 @@ spec:
         app.kubernetes.io/component: mcp
         app.kubernetes.io/name: {{ $name }}
     spec:
+      {{- include "agentic-ops.imagePullSecrets" $ | nindent 6 }}
       containers:
         - name: mcp-{{ $name }}
           image: {{ $.Values.images.mcp.repository }}:{{ $.Values.images.mcp.tag }}
@@ -29,6 +30,10 @@ spec:
               containerPort: {{ $mcp.port }}
           env:
             {{- include "agentic-ops.commonEnv" $ | nindent 12 }}
+          {{- if $.Values.bootstrap.existingSecret }}
+          envFrom:
+            {{- include "agentic-ops.bootstrapEnvFrom" $ | nindent 12 }}
+          {{- end }}
           volumeMounts:
             {{- include "agentic-ops.commonVolumeMounts" $ | nindent 12 }}
       volumes:

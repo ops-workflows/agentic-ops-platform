@@ -29,7 +29,12 @@ Use this skill for the scheduled weekly workflow-reflection run. The input is no
 - If `reflect_patterns` fails or times out, note that explicitly and stop. Do not fall back to `recall_similar` just because reflection failed.
 
 ### Step 2: Compare Patterns With Current Guidance
-- Read the current relevant skills and agent instructions before proposing changes
+- Read only the current workflow-repo guidance before proposing changes:
+   workflow-local skills/instructions and shared skills under the workflow
+   repository's `skills/` directory. Read `manifest.yaml` first: only assets
+   whose `assets.sources` value is `team` or `workflow` are eligible. Assets
+   marked `core` come from the public platform and must not be reviewed,
+   optimized, or proposed for modification.
 - Check whether the weekly patterns are already covered
 - Look for gaps between what long-term memory says the workflow did across the week and what the current guidance tells the agent to do
 
@@ -60,6 +65,9 @@ This creates a GitHub PR tagged `[reflect]` for human review. The update only ta
 - Workflow skills: `workflows/{workflow}/skills/{skill}/SKILL.md`
 - Workflow agents: `workflows/{workflow}/agents/{agent}.md`
 - Shared skills: `skills/{skill}/SKILL.md`
+
+All paths are relative to the bootstrapped workflow repository. The PR always
+targets that repository; platform-core files are never PR targets.
 
 If the issue is documentation drift rather than investigation procedure drift, create a visible message handoff to the `documentation` workflow instead of proposing a skill update.
 

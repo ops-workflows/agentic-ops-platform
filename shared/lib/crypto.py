@@ -151,7 +151,6 @@ def decrypt_named_secrets(
     Example input:
         {
             "API_TOKEN": {"encrypted": "ENC[age,...]"},
-            "GITHUB_TOKEN": {"encrypted": "ENC[age,...]"},
         }
     """
     if not secrets:

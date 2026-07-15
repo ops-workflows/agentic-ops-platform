@@ -69,24 +69,75 @@ def build_workflow_bundle(
     workflow_hash = _hash_sources([package.path])
 
     shadowed_assets: list[dict[str, str]] = []
+    asset_sources: dict[str, str] = {}
     _copy_file_if_exists(
-        platform_root / "CLAUDE.md", bundle_dir / "CLAUDE.md", layer="core", shadowed_assets=shadowed_assets
+        platform_root / "CLAUDE.md",
+        bundle_dir / "CLAUDE.md",
+        bundle_dir=bundle_dir,
+        layer="core",
+        shadowed_assets=shadowed_assets,
+        asset_sources=asset_sources,
     )
-    _overlay_dir(platform_root / "skills", bundle_dir / "skills", layer="core", shadowed_assets=shadowed_assets)
-    _overlay_dir(platform_root / "hooks", bundle_dir / "hooks", layer="core", shadowed_assets=shadowed_assets)
+    _overlay_dir(
+        platform_root / "skills",
+        bundle_dir / "skills",
+        bundle_dir=bundle_dir,
+        layer="core",
+        shadowed_assets=shadowed_assets,
+        asset_sources=asset_sources,
+    )
+    _overlay_dir(
+        platform_root / "hooks",
+        bundle_dir / "hooks",
+        bundle_dir=bundle_dir,
+        layer="core",
+        shadowed_assets=shadowed_assets,
+        asset_sources=asset_sources,
+    )
 
     _copy_file_if_exists(
-        team_root / "CLAUDE.md", bundle_dir / "CLAUDE.md", layer="team", shadowed_assets=shadowed_assets
+        team_root / "CLAUDE.md",
+        bundle_dir / "CLAUDE.md",
+        bundle_dir=bundle_dir,
+        layer="team",
+        shadowed_assets=shadowed_assets,
+        asset_sources=asset_sources,
     )
-    _overlay_dir(team_root / "skills", bundle_dir / "skills", layer="team", shadowed_assets=shadowed_assets)
-    _overlay_dir(team_root / "hooks", bundle_dir / "hooks", layer="team", shadowed_assets=shadowed_assets)
+    _overlay_dir(
+        team_root / "skills",
+        bundle_dir / "skills",
+        bundle_dir=bundle_dir,
+        layer="team",
+        shadowed_assets=shadowed_assets,
+        asset_sources=asset_sources,
+    )
+    _overlay_dir(
+        team_root / "hooks",
+        bundle_dir / "hooks",
+        bundle_dir=bundle_dir,
+        layer="team",
+        shadowed_assets=shadowed_assets,
+        asset_sources=asset_sources,
+    )
 
     for file_name in WORKFLOW_TOP_LEVEL_FILES:
         _copy_file_if_exists(
-            package.path / file_name, bundle_dir / file_name, layer="workflow", shadowed_assets=shadowed_assets
+            package.path / file_name,
+            bundle_dir / file_name,
+            bundle_dir=bundle_dir,
+            layer="workflow",
+            shadowed_assets=shadowed_assets,
+            asset_sources=asset_sources,
         )
     for dir_name in WORKFLOW_TOP_LEVEL_DIRS:
-        _overlay_dir(package.path / dir_name, bundle_dir / dir_name, layer="workflow", shadowed_assets=shadowed_assets)
+        _overlay_dir(
+            package.path / dir_name,
+            bundle_dir / dir_name,
+            bundle_dir=bundle_dir,
+            layer="workflow",
+            shadowed_assets=shadowed_assets,
+            asset_sources=asset_sources,
+        )
 
     warnings.extend(_validate_no_plaintext_secrets(bundle_dir))
     if warnings:
@@ -113,6 +164,7 @@ def build_workflow_bundle(
             "core_sha": core_hash,
             "team_sha": team_hash,
             "workflow_sha": workflow_hash,
+            "sources": dict(sorted(asset_sources.items())),
             "shadowed": shadowed_assets,
         },
         "created_at": now.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
@@ -166,16 +218,33 @@ def _team_root_for_package(workflow_dir: Path) -> Path:
     return workflow_dir.parent
 
 
-def _copy_file_if_exists(src: Path, dest: Path, *, layer: str, shadowed_assets: list[dict[str, str]]) -> None:
+def _copy_file_if_exists(
+    src: Path,
+    dest: Path,
+    *,
+    bundle_dir: Path,
+    layer: str,
+    shadowed_assets: list[dict[str, str]],
+    asset_sources: dict[str, str],
+) -> None:
     if not src.exists() or not src.is_file() or src.name in SKIP_FILES:
         return
     if dest.exists():
         shadowed_assets.append({"path": str(dest.relative_to(dest.parents[1])), "by": layer})
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dest)
+    asset_sources[str(dest.relative_to(bundle_dir))] = layer
 
 
-def _overlay_dir(src: Path, dest: Path, *, layer: str, shadowed_assets: list[dict[str, str]]) -> None:
+def _overlay_dir(
+    src: Path,
+    dest: Path,
+    *,
+    bundle_dir: Path,
+    layer: str,
+    shadowed_assets: list[dict[str, str]],
+    asset_sources: dict[str, str],
+) -> None:
     if not src.exists() or not src.is_dir():
         return
     for path in sorted(src.rglob("*")):
@@ -189,6 +258,7 @@ def _overlay_dir(src: Path, dest: Path, *, layer: str, shadowed_assets: list[dic
             shadowed_assets.append({"path": str(target.relative_to(dest.parents[0])), "by": layer})
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, target)
+        asset_sources[str(target.relative_to(bundle_dir))] = layer
 
 
 def _hash_sources(paths: list[Path]) -> str:

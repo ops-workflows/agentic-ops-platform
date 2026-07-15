@@ -28,7 +28,9 @@ def _remote_config(**overrides) -> BootstrapConfig:
         "repo_ref": "v1.2.3",
         "repo_pat": "ghp_token",
         "age_identity": "AGE-SECRET-KEY-1EXAMPLE",
-        "model_gateway_api_key": "sk-model-key",
+        "llm_api_key": "sk-model-key",
+        "pg_password": "postgres-secret",
+        "object_store_secret_key": "object-store-secret",
     }
     base.update(overrides)
     return BootstrapConfig(**base)
@@ -40,7 +42,9 @@ def _local_config(**overrides) -> BootstrapConfig:
         "source": "local",
         "local_path": "/home/op/corp-workflows",
         "age_identity": "AGE-SECRET-KEY-1EXAMPLE",
-        "model_gateway_api_key": "sk-model-key",
+        "llm_api_key": "sk-model-key",
+        "pg_password": "postgres-secret",
+        "object_store_secret_key": "object-store-secret",
     }
     base.update(overrides)
     return BootstrapConfig(**base)
@@ -57,21 +61,25 @@ def test_validate_rejects_remote_source_for_compose_target():
 
 def test_validate_requires_repo_url_for_remote_source():
     config = _remote_config(repo_url="")
-    with pytest.raises(ValueError, match="--repo-url is required"):
+    with pytest.raises(ValueError, match="Workflow repo URL is required"):
         config.validate()
 
 
 def test_validate_requires_local_path_for_local_source():
     config = _local_config(local_path="")
-    with pytest.raises(ValueError, match="--local-path is required"):
+    with pytest.raises(ValueError, match="Local workflow-repo checkout path is required"):
         config.validate()
 
 
-def test_validate_requires_age_identity_and_model_key():
-    with pytest.raises(ValueError, match="--age-identity is required"):
+def test_validate_requires_bootstrap_secrets():
+    with pytest.raises(ValueError, match="AGE identity is required"):
         _remote_config(age_identity="").validate()
-    with pytest.raises(ValueError, match="--model-gateway-api-key is required"):
-        _remote_config(model_gateway_api_key="").validate()
+    with pytest.raises(ValueError, match="LLM API key is required"):
+        _remote_config(llm_api_key="").validate()
+    with pytest.raises(ValueError, match="Postgres password is required"):
+        _remote_config(pg_password="").validate()
+    with pytest.raises(ValueError, match="Object-store secret key is required"):
+        _remote_config(object_store_secret_key="").validate()
 
 
 def test_validate_accepts_valid_remote_kubernetes_config():
@@ -93,10 +101,10 @@ def test_normalize_age_identity_passes_through_existing_file_prefix():
     assert normalize_age_identity("file:/etc/agentic-ops/key.txt") == "file:/etc/agentic-ops/key.txt"
 
 
-def test_normalize_age_identity_wraps_existing_path(tmp_path: Path):
+def test_normalize_age_identity_reads_existing_path(tmp_path: Path):
     key_file = tmp_path / "key.txt"
     key_file.write_text("AGE-SECRET-KEY-1EXAMPLE\n", encoding="utf-8")
-    assert normalize_age_identity(str(key_file)) == f"file:{key_file}"
+    assert normalize_age_identity(str(key_file)) == "AGE-SECRET-KEY-1EXAMPLE"
 
 
 def test_normalize_age_identity_leaves_nonexistent_path_as_raw_value():
@@ -112,7 +120,9 @@ def test_build_bootstrap_env_remote_source_includes_repo_pointer():
     assert env["WORKFLOW_REPO_REF"] == "v1.2.3"
     assert env["WORKFLOW_REPO_PAT"] == "ghp_token"
     assert env["AGE_IDENTITY"] == "AGE-SECRET-KEY-1EXAMPLE"
-    assert env["MODEL_GATEWAY_API_KEY"] == "sk-model-key"
+    assert env["LLM_API_KEY"] == "sk-model-key"
+    assert env["PG_PASSWORD"] == "postgres-secret"
+    assert env["OBJECT_STORE_SECRET_KEY"] == "object-store-secret"
 
 
 def test_build_bootstrap_env_remote_source_omits_pat_when_blank():
@@ -121,9 +131,15 @@ def test_build_bootstrap_env_remote_source_omits_pat_when_blank():
 
 
 def test_build_bootstrap_env_local_compose_sets_host_bind_mount_vars():
-    env = build_bootstrap_env(_local_config())
+    env = build_bootstrap_env(
+        _local_config(repo_url="https://github.com/acme/corp-workflows.git", repo_pat="github-pr-token")
+    )
+    assert env["WORKFLOW_REPO_SOURCE"] == "local"
+    assert env["WORKFLOW_REPO_URL"] == "https://github.com/acme/corp-workflows.git"
+    assert env["WORKFLOW_REPO_PAT"] == "github-pr-token"
     assert env["HOST_WORKFLOW_REPO_PATH"] == "/home/op/corp-workflows"
     assert env["HOST_PLATFORM_CONFIG_FILE"] == "/home/op/corp-workflows/platform-config.yaml"
+    assert env["WORKFLOW_COMPOSE_ENV_FILE"] == "/home/op/corp-workflows/deploy/compose.env"
     assert "WORKFLOW_REPO_PATHS" not in env
 
 
@@ -137,9 +153,9 @@ def test_build_bootstrap_env_local_kubernetes_sets_workflow_repo_paths():
 
 
 def test_render_compose_env_shape():
-    content = render_compose_env({"AGE_IDENTITY": "abc", "MODEL_GATEWAY_API_KEY": "xyz"})
+    content = render_compose_env({"AGE_IDENTITY": "abc", "LLM_API_KEY": "xyz"})
     assert "AGE_IDENTITY=abc" in content
-    assert "MODEL_GATEWAY_API_KEY=xyz" in content
+    assert "LLM_API_KEY=xyz" in content
     assert content.startswith("# Generated by scripts/bootstrap.py")
 
 
@@ -158,7 +174,7 @@ def test_render_gcp_secrets_script_contains_gcloud_commands():
 
 
 def test_render_scripts_quote_values_with_special_characters():
-    content = render_k8s_secret_script({"MODEL_GATEWAY_API_KEY": "it's a 'secret'"})
+    content = render_k8s_secret_script({"LLM_API_KEY": "it's a 'secret'"})
     assert "it'\\''s a '\\''secret'\\''" in content
 
 
@@ -179,6 +195,13 @@ def test_write_artifact_kubernetes_target_writes_executable_script(tmp_path: Pat
     assert path.stat().st_mode & 0o111  # executable bit set
 
 
+def test_write_artifact_kubernetes_target_uses_configured_namespace(tmp_path: Path):
+    path = write_artifact(_remote_config(namespace="test-namespace"), output_dir=tmp_path)
+    content = path.read_text(encoding="utf-8")
+    assert "--namespace test-namespace" in content
+    assert "--from-literal=KUBERNETES_NAMESPACE='test-namespace'" in content
+
+
 def test_write_artifact_gcp_target_writes_executable_script(tmp_path: Path):
     path = write_artifact(_remote_config(target="gcp"), output_dir=tmp_path)
     assert path == tmp_path / "dist" / "bootstrap" / "gcp-secrets.sh"
@@ -186,69 +209,24 @@ def test_write_artifact_gcp_target_writes_executable_script(tmp_path: Path):
     assert path.stat().st_mode & 0o111
 
 
-# ── main() (non-interactive CLI) ──────────────────────────────────────
+# ── main() (prompt-only) ─────────────────────────────────────────────
 
 
-def test_main_non_interactive_writes_compose_env(tmp_path: Path, capsys):
-    exit_code = main(
-        [
-            "--non-interactive",
-            "--target",
-            "compose",
-            "--source",
-            "local",
-            "--local-path",
-            "/home/op/corp-workflows",
-            "--age-identity",
-            "AGE-SECRET-KEY-1EXAMPLE",
-            "--model-gateway-api-key",
-            "sk-model-key",
-            "--output-dir",
-            str(tmp_path),
-        ]
-    )
+def test_main_writes_compose_artifact(monkeypatch, tmp_path: Path, capsys):
+    artifact = tmp_path / "compose.env"
+    monkeypatch.setattr("scripts.bootstrap.gather_config_interactively", _local_config)
+    monkeypatch.setattr("scripts.bootstrap.write_artifact", lambda config: artifact)
+
+    exit_code = main()
     assert exit_code == 0
-    assert (tmp_path / "compose.env").exists()
-    assert "docker compose" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert str(artifact) in output
+    assert "make up-auto" in output
 
 
-def test_main_non_interactive_missing_required_value_returns_error(tmp_path: Path, capsys):
-    exit_code = main(
-        [
-            "--non-interactive",
-            "--target",
-            "kubernetes",
-            "--source",
-            "remote",
-            "--age-identity",
-            "AGE-SECRET-KEY-1EXAMPLE",
-            "--model-gateway-api-key",
-            "sk-model-key",
-            "--output-dir",
-            str(tmp_path),
-        ]
-    )
-    assert exit_code == 1
-    assert "--repo-url is required" in capsys.readouterr().err
+def test_main_reports_invalid_prompted_configuration(monkeypatch, capsys):
+    monkeypatch.setattr("scripts.bootstrap.gather_config_interactively", lambda: _remote_config(target="compose"))
 
-
-def test_main_non_interactive_rejects_remote_compose_combo(tmp_path: Path, capsys):
-    exit_code = main(
-        [
-            "--non-interactive",
-            "--target",
-            "compose",
-            "--source",
-            "remote",
-            "--repo-url",
-            "https://github.com/acme/workflows.git",
-            "--age-identity",
-            "AGE-SECRET-KEY-1EXAMPLE",
-            "--model-gateway-api-key",
-            "sk-model-key",
-            "--output-dir",
-            str(tmp_path),
-        ]
-    )
+    exit_code = main()
     assert exit_code == 1
     assert "bind-mount a local workflow-repo checkout" in capsys.readouterr().err

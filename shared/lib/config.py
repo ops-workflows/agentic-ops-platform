@@ -51,17 +51,11 @@ class HindsightSettings(BaseSettings):
     hindsight_url: str = "http://hindsight:8888"
 
 
-class GithubSettings(BaseSettings):
-    github_token: str = ""
-    github_repo: str = ""
-
-
 class Settings(
     DatabaseSettings,
     ObjectStoreSettings,
     MessageBusSettings,
     HindsightSettings,
-    GithubSettings,
 ):
     gateway_host: str = "0.0.0.0"  # noqa: S104
     gateway_port: int = 8080
@@ -80,6 +74,7 @@ class Settings(
     # by os.pathsep. Each root may be a workflow directory, a directory whose
     # direct children are workflows, or a repo root containing workflows/*.
     workflow_repo_paths: str = ""
+    workflow_repo_source: str = ""
     workflow_repo_url: str = ""
     workflow_repo_ref: str = ""
     # Bootstrap-only credential to authenticate the clone/fetch of

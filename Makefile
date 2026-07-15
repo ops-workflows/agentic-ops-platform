@@ -9,7 +9,11 @@ TEST_DB_NAME ?= agentic_ops_test
 TEST_DATABASE_URL ?= postgresql+asyncpg://$(PGUSER):$(PGPASSWORD)@localhost:5432/$(TEST_DB_NAME)
 RUNTIME_IMAGE ?= ai-ops-agent-runtime:latest
 COMPOSE_PROJECT_NAME ?= aiops-test
-COMPOSE ?= docker compose -f deploy/docker-compose.yml
+COMPOSE_BOOTSTRAP_ENV_FILE ?= compose.env
+WORKFLOW_COMPOSE_ENV_FILE ?= $(shell sed -n 's/^WORKFLOW_COMPOSE_ENV_FILE=//p' "$(COMPOSE_BOOTSTRAP_ENV_FILE)" 2>/dev/null | tail -1)
+HOST_PLATFORM_CONFIG_FILE ?= $(shell sed -n 's/^HOST_PLATFORM_CONFIG_FILE=//p' "$(COMPOSE_BOOTSTRAP_ENV_FILE)" 2>/dev/null | tail -1)
+COMPOSE_ENV_FILES := $(if $(wildcard $(WORKFLOW_COMPOSE_ENV_FILE)),--env-file "$(WORKFLOW_COMPOSE_ENV_FILE)") $(if $(wildcard $(COMPOSE_BOOTSTRAP_ENV_FILE)),--env-file "$(COMPOSE_BOOTSTRAP_ENV_FILE)")
+COMPOSE ?= docker compose $(COMPOSE_ENV_FILES) -f deploy/docker-compose.yml
 
 .PHONY: help unit-tests service-tests runtime-tests test \
 	ensure-test-db up up-auto compose-build runtime-build clean-test-containers \
@@ -39,7 +43,7 @@ up: ## Start the local docker compose stack
 	$(COMPOSE) up -d
 
 up-auto: ## Start only the services this instance's platform-config.yaml enables (profiles derived automatically)
-	@profiles="$$($(PYTHON) scripts/compose_profiles.py)"; \
+	@profiles="$$(HOST_PLATFORM_CONFIG_FILE="$(HOST_PLATFORM_CONFIG_FILE)" $(PYTHON) scripts/compose_profiles.py)"; \
 	echo "Computed COMPOSE_PROFILES=$$profiles"; \
 	COMPOSE_PROFILES="$$profiles" $(COMPOSE) up -d
 

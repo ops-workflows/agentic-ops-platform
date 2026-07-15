@@ -29,9 +29,10 @@ connectors:
 `connectors.enabled` lists instance ids to run and surfaces them in the
 platform connectors catalog. `connectors.instances.<id>` holds the full
 instance definition; `${VAR}` placeholders resolve from `config:` values,
-`secrets:`, and the process environment at load time. The running container
-selects its instance via the `CONNECTOR_INSTANCE_ID` env var in your
-deployment override.
+`secrets:`, and the process environment at load time. A shipped generic
+connector automatically selects its one enabled instance of the matching type.
+Set `CONNECTOR_INSTANCE_ID` only when one deployment must select from multiple
+enabled instances of that type.
 
 ## Adding a custom connector
 

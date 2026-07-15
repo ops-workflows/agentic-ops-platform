@@ -11,6 +11,7 @@ from shared.lib.platform_secrets import (
     expand_env_placeholders,
     load_connector_instance,
     load_connector_instances,
+    load_enabled_connector_instance,
     load_mcp_server_config,
 )
 
@@ -64,6 +65,28 @@ def test_load_connector_instances_expands_env(tmp_path, monkeypatch):
 def test_load_connector_instances_missing_section_returns_empty(tmp_path):
     config = _write(tmp_path / "platform-config.yaml", "config: {}\n")
     assert load_connector_instances(config) == {}
+
+
+def test_load_enabled_connector_instance_selects_one_matching_enabled_instance(tmp_path):
+    config = _write(
+        tmp_path / "platform-config.yaml",
+        """
+        connectors:
+          enabled:
+            - sf-intake
+          instances:
+            sf-intake:
+              type: gcp-pubsub
+            disabled-servicenow:
+              type: servicenow
+        """,
+    )
+
+    instance_id, instance = load_enabled_connector_instance(config, "gcp-pubsub")
+    assert instance_id == "sf-intake"
+    assert instance == {"type": "gcp-pubsub"}
+
+    assert load_enabled_connector_instance(config, "servicenow") == ("", {})
 
 
 def test_load_mcp_server_config_returns_expanded_block(tmp_path, monkeypatch):
