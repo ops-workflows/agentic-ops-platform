@@ -197,10 +197,10 @@ def _fake_services(
     fake_mcp: TestMCPServer,
 ) -> dict[str, _UvicornServer]:
     """Start all four fake services on free ports for the module."""
-    message_srv = run_app_in_background(fake_mattermost.app)
-    hs_srv = run_app_in_background(fake_hindsight.app)
-    llm_srv = run_app_in_background(mock_llm.app)
-    mcp_srv = run_app_in_background(fake_mcp.app)
+    message_srv = run_app_in_background(fake_mattermost.app, host="0.0.0.0")
+    hs_srv = run_app_in_background(fake_hindsight.app, host="0.0.0.0")
+    llm_srv = run_app_in_background(mock_llm.app, host="0.0.0.0")
+    mcp_srv = run_app_in_background(fake_mcp.app, host="0.0.0.0")
 
     yield {
         "message": message_srv,
@@ -269,7 +269,7 @@ def _event_store() -> list[dict[str, Any]]:
 @pytest.fixture(scope="module")
 def _event_collector(_event_store: list[dict[str, Any]]) -> _UvicornServer:
     app = _build_event_collector_app(_event_store)
-    srv = run_app_in_background(app)
+    srv = run_app_in_background(app, host="0.0.0.0")
     yield srv
     srv.stop()
 
@@ -704,7 +704,7 @@ def spawn_and_wait(
                 await backup_memory(task.workflow)
             finally:
                 shared_settings.message_bus_api_url = original_message_bus_api_url
-        if os.environ.get("RUNTIME_TEST_DEBUG") == "1":
+        if exit_code != 0 or os.environ.get("RUNTIME_TEST_DEBUG") == "1":
             import sys as _sys
 
             _sys.stderr.write(f"\n===CONTAINER LOGS (exit={exit_code})===\n{logs}\n===END LOGS===\n")

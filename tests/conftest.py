@@ -151,8 +151,8 @@ def free_port() -> int:
 class _UvicornServer:
     """Run a FastAPI app in a background thread for the duration of a test."""
 
-    def __init__(self, app, port: int) -> None:
-        config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="on")
+    def __init__(self, app, port: int, *, host: str = "127.0.0.1") -> None:
+        config = uvicorn.Config(app, host=host, port=port, log_level="warning", lifespan="on")
         self._server = uvicorn.Server(config)
         self._thread = threading.Thread(target=self._server.run, daemon=True)
         self.port = port
@@ -171,8 +171,8 @@ class _UvicornServer:
         self._thread.join(timeout=5)
 
 
-def run_app_in_background(app, port: int | None = None) -> _UvicornServer:
-    server = _UvicornServer(app, port or _free_port())
+def run_app_in_background(app, port: int | None = None, *, host: str = "127.0.0.1") -> _UvicornServer:
+    server = _UvicornServer(app, port or _free_port(), host=host)
     server.start()
     return server
 

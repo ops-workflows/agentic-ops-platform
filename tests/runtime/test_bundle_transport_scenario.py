@@ -55,7 +55,7 @@ async def test_runtime_stages_workspace_from_https_bundle_uri(
     def _serve_bundle() -> Response:
         return Response(content=tarball_bytes, media_type="application/gzip")
 
-    server = run_app_in_background(app)
+    server = run_app_in_background(app, host="0.0.0.0")
 
     original_uri_template = settings.runtime_bundle_uri_template
     original_bundle_root = settings.runtime_bundle_root
