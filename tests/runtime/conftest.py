@@ -23,7 +23,6 @@ import contextlib
 import io
 import os
 import shutil
-import sys
 import tarfile
 import uuid
 from pathlib import Path
@@ -641,7 +640,6 @@ def spawn_and_wait(
     _fake_services: dict[str, _UvicornServer],
     _event_collector: _UvicornServer,
     local_memory_store,
-    monkeypatch,
 ):
     """Spawn a runtime container and wait for it to exit.
 
@@ -654,21 +652,6 @@ def spawn_and_wait(
     will merge into the docker run env.
     """
     containers: list = []
-
-    if sys.platform == "linux":
-        from session_manager.runtime_launchers import DockerRuntimeLauncher, get_runtime_launcher
-
-        launcher = get_runtime_launcher()
-        if isinstance(launcher, DockerRuntimeLauncher):
-            original_run = launcher.client.containers.run
-
-            def run_with_host_gateway(*args, **kwargs):
-                extra_hosts = dict(kwargs.get("extra_hosts") or {})
-                extra_hosts.setdefault("host.docker.internal", "host-gateway")
-                kwargs["extra_hosts"] = extra_hosts
-                return original_run(*args, **kwargs)
-
-            monkeypatch.setattr(launcher.client.containers, "run", run_with_host_gateway)
 
     async def _spawn(task, *, timeout_sec: int = 120) -> tuple[int, str]:
         # Re-assert the patched URLs in case any preceding fixture (e.g.
