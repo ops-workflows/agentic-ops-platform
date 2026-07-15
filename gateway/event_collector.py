@@ -125,16 +125,24 @@ async def receive_event(event: EventPayload):
         task_uuid = None
 
     async with async_session_factory() as session:
-        db_event = SessionEvent(
-            task_id=task_uuid,
-            event_type=event.event_type,
-            timestamp=datetime.fromisoformat(event.timestamp),
-            data=event.data,
-        )
-        session.add(db_event)
-
         if task_uuid:
             task = await session.scalar(select(Task).where(Task.id == task_uuid).with_for_update())
+        else:
+            task = None
+
+        # Lock the parent task before adding its child event. Otherwise two
+        # concurrent events can each acquire a foreign-key key-share lock,
+        # then deadlock while upgrading to the task row lock.
+        session.add(
+            SessionEvent(
+                task_id=task_uuid,
+                event_type=event.event_type,
+                timestamp=datetime.fromisoformat(event.timestamp),
+                data=event.data,
+            )
+        )
+
+        if task_uuid:
             task_updates: dict[str, Any] = {
                 "heartbeat": datetime.now(UTC),
             }

@@ -614,6 +614,10 @@ def _apply_runtime_claude_settings_overrides() -> None:
     if _bubblewrap_supported():
         return
 
+    if sandbox.get("enableWeakerNestedSandbox") is True and shutil.which("bwrap"):
+        logger.info("Keeping Claude sandbox enabled with weaker nested sandbox mode in %s", CLAUDE_SETTINGS_PATH)
+        return
+
     changed = False
     if sandbox.get("enabled") is not False:
         sandbox["enabled"] = False

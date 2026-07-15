@@ -22,6 +22,7 @@ pytestmark = pytest.mark.unit
 
 from runtime import session_entrypoint  # noqa: E402
 from runtime.session_entrypoint import (  # noqa: E402
+    _apply_runtime_claude_settings_overrides,
     _build_credential_envvars,
     _resolve_default_agent,
 )
@@ -70,6 +71,27 @@ def test_malformed_entries_are_ignored():
         existing_entries=["not-a-dict", {"mode": "deny"}, {"name": ""}],  # type: ignore[list-item]
     )
     assert out == [{"name": "GOOD_TOKEN", "mode": "deny"}]
+
+
+def test_weaker_nested_sandbox_is_not_disabled_when_normal_probe_fails(tmp_path, monkeypatch):
+    settings_path = tmp_path / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps({"sandbox": {"enabled": True, "enableWeakerNestedSandbox": True}}))
+
+    monkeypatch.setattr(session_entrypoint, "CLAUDE_SETTINGS_PATH", settings_path)
+    monkeypatch.setattr(session_entrypoint, "_bubblewrap_supported", lambda: False)
+    monkeypatch.setattr(
+        session_entrypoint.shutil,
+        "which",
+        lambda name: "/usr/bin/bwrap" if name == "bwrap" else None,
+    )
+
+    _apply_runtime_claude_settings_overrides()
+
+    assert json.loads(settings_path.read_text())["sandbox"] == {
+        "enabled": True,
+        "enableWeakerNestedSandbox": True,
+    }
 
 
 @pytest.mark.asyncio
