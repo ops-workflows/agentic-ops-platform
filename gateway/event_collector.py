@@ -16,7 +16,7 @@ from typing import Any
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from gateway.approval_broker import ensure_approval_prompt_posted
 from shared.lib.approvals import apply_approval_event
@@ -134,7 +134,7 @@ async def receive_event(event: EventPayload):
         session.add(db_event)
 
         if task_uuid:
-            task = await session.get(Task, task_uuid)
+            task = await session.scalar(select(Task).where(Task.id == task_uuid).with_for_update())
             task_updates: dict[str, Any] = {
                 "heartbeat": datetime.now(UTC),
             }
