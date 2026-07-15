@@ -18,8 +18,7 @@ from session_manager.runtime_launchers import (
 pytestmark = pytest.mark.unit
 
 
-def test_docker_launcher_translates_spec_to_container_run(monkeypatch):
-    monkeypatch.setattr("session_manager.runtime_launchers.sys.platform", "linux")
+def test_docker_launcher_translates_spec_to_container_run():
     client = MagicMock()
     client.containers.get.side_effect = docker.errors.NotFound("missing")
     container = MagicMock()
@@ -48,29 +47,7 @@ def test_docker_launcher_translates_spec_to_container_run(monkeypatch):
     assert kwargs["environment"] == {"A": "1"}
     assert kwargs["volumes"]["/workflows/platform-test"] == {"bind": "/plugin-src", "mode": "ro"}
     assert kwargs["volumes"]["agent-memory-platform-test"] == {"bind": "/memory", "mode": "rw"}
-    assert kwargs["extra_hosts"] == {"host.docker.internal": "host-gateway"}
     assert kwargs["labels"]["agentic_ops.runtime_provider"] == "docker"
-
-
-def test_docker_launcher_preserves_docker_desktop_host_routing(monkeypatch):
-    monkeypatch.setattr("session_manager.runtime_launchers.sys.platform", "darwin")
-    client = MagicMock()
-    client.containers.get.side_effect = docker.errors.NotFound("missing")
-    container = MagicMock()
-    container.id = "container-id"
-    container.short_id = "abc123"
-    client.containers.run.return_value = container
-
-    DockerRuntimeLauncher(client).launch(
-        RuntimeLaunchSpec(
-            task_id="task-12345678",
-            workflow="platform-test",
-            image="runtime:latest",
-            environment={"A": "1"},
-        )
-    )
-
-    assert "extra_hosts" not in client.containers.run.call_args.kwargs
 
 
 def test_docker_launcher_mounts_workflow_bundle_instead_of_source_dirs():

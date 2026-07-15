@@ -8,7 +8,6 @@ of the platform can stop depending directly on a Docker daemon.
 from __future__ import annotations
 
 import logging
-import sys
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -166,9 +165,6 @@ class DockerRuntimeLauncher:
                 "agentic_ops.runtime_provider": self.provider,
             },
         }
-        if sys.platform == "linux":
-            run_kwargs["extra_hosts"] = {"host.docker.internal": "host-gateway"}
-
         container = self.client.containers.run(**run_kwargs)
         return RuntimeHandle(
             id=container.id,
