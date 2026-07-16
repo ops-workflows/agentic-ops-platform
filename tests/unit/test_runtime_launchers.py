@@ -20,6 +20,7 @@ pytestmark = pytest.mark.unit
 
 def test_docker_launcher_translates_spec_to_container_run(monkeypatch):
     monkeypatch.setattr("session_manager.runtime_launchers.sys.platform", "linux")
+    monkeypatch.delenv("RUNTIME_SECCOMP_UNCONFINED", raising=False)
     client = MagicMock()
     client.containers.get.side_effect = docker.errors.NotFound("missing")
     container = MagicMock()
@@ -50,6 +51,29 @@ def test_docker_launcher_translates_spec_to_container_run(monkeypatch):
     assert kwargs["volumes"]["agent-memory-platform-test"] == {"bind": "/memory", "mode": "rw"}
     assert kwargs["extra_hosts"] == {"host.docker.internal": "host-gateway"}
     assert kwargs["labels"]["agentic_ops.runtime_provider"] == "docker"
+    assert "security_opt" not in kwargs
+
+
+def test_docker_launcher_allows_opt_in_unconfined_seccomp(monkeypatch):
+    monkeypatch.setenv("RUNTIME_SECCOMP_UNCONFINED", "true")
+    client = MagicMock()
+    client.containers.get.side_effect = docker.errors.NotFound("missing")
+    container = MagicMock()
+    container.id = "container-id"
+    container.short_id = "abc123"
+    client.containers.run.return_value = container
+
+    DockerRuntimeLauncher(client).launch(
+        RuntimeLaunchSpec(
+            task_id="task-12345678",
+            workflow="platform-test",
+            image="runtime:latest",
+            environment={},
+        )
+    )
+
+    assert client.containers.run.call_args.kwargs["security_opt"] == ["seccomp=unconfined"]
+    assert client.containers.run.call_args.kwargs["environment"]["CLAUDE_SANDBOX_ENABLE_WEAKER_NESTED"] == "1"
 
 
 def test_docker_launcher_preserves_docker_desktop_host_routing(monkeypatch):

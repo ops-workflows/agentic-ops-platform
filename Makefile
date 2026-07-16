@@ -10,6 +10,7 @@ TEST_PG_PORT ?= 55432
 TEST_DATABASE_URL ?= postgresql+asyncpg://$(PGUSER):$(PGPASSWORD)@localhost:$(TEST_PG_PORT)/$(TEST_DB_NAME)
 RUNTIME_IMAGE ?= ai-ops-agent-runtime:latest
 RUNTIME_BUILD ?= docker build
+RUNTIME_SECCOMP_UNCONFINED ?= true
 COMPOSE_PROJECT_NAME ?= aiops-test
 COMPOSE_BOOTSTRAP_ENV_FILE ?= compose.env
 WORKFLOW_COMPOSE_ENV_FILE ?= $(shell sed -n 's/^WORKFLOW_COMPOSE_ENV_FILE=//p' "$(COMPOSE_BOOTSTRAP_ENV_FILE)" 2>/dev/null | tail -1)
@@ -74,12 +75,12 @@ service-tests: ensure-test-db ## Run service/Postgres tests
 	TEST_DATABASE_URL='$(TEST_DATABASE_URL)' $(PYTEST) tests/service $(PYTEST_FLAGS)
 
 runtime-tests: ensure-test-db runtime-build ## Run runtime scenario tests (Postgres + Docker required)
-	TEST_DATABASE_URL='$(TEST_DATABASE_URL)' TEST_RUNTIME_ENABLED=1 \
+	TEST_DATABASE_URL='$(TEST_DATABASE_URL)' TEST_RUNTIME_ENABLED=1 RUNTIME_SECCOMP_UNCONFINED=$(RUNTIME_SECCOMP_UNCONFINED) \
 		COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) \
 		$(PYTEST) tests/runtime $(PYTEST_TIMEOUT_FLAGS) $(PYTEST_FLAGS)
 
 test: ensure-test-db runtime-build ## Run all three suites (unit + service + runtime)
-	TEST_DATABASE_URL='$(TEST_DATABASE_URL)' TEST_RUNTIME_ENABLED=1 \
+	TEST_DATABASE_URL='$(TEST_DATABASE_URL)' TEST_RUNTIME_ENABLED=1 RUNTIME_SECCOMP_UNCONFINED=$(RUNTIME_SECCOMP_UNCONFINED) \
 		COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) \
 		$(PYTEST) tests $(PYTEST_FLAGS)
 

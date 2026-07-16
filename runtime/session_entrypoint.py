@@ -612,6 +612,24 @@ def _apply_runtime_claude_settings_overrides() -> None:
     if not isinstance(sandbox, dict) or not sandbox.get("enabled"):
         return
 
+    if os.environ.get("CLAUDE_SANDBOX_ENABLE_WEAKER_NESTED", "").lower() in {"1", "true", "yes", "on"}:
+        sandbox["enableWeakerNestedSandbox"] = True
+        filesystem = sandbox.get("filesystem")
+        if not isinstance(filesystem, dict):
+            filesystem = {}
+        allow_write = filesystem.get("allowWrite")
+        if not isinstance(allow_write, list):
+            allow_write = []
+        if "/memory" not in allow_write:
+            allow_write.append("/memory")
+        filesystem["allowWrite"] = allow_write
+        sandbox["filesystem"] = filesystem
+        settings["sandbox"] = sandbox
+        CLAUDE_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CLAUDE_SETTINGS_PATH.write_text(json.dumps(settings, indent=2) + "\n")
+        logger.info("Enabled Claude weak nested sandbox mode in %s", CLAUDE_SETTINGS_PATH)
+        return
+
     if _bubblewrap_supported():
         return
 
