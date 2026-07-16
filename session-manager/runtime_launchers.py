@@ -175,7 +175,7 @@ class DockerRuntimeLauncher:
         if sys.platform == "linux":
             run_kwargs["extra_hosts"] = {"host.docker.internal": "host-gateway"}
         if _runtime_seccomp_unconfined_enabled():
-            run_kwargs["security_opt"] = ["seccomp=unconfined"]
+            run_kwargs["security_opt"] = ["seccomp=unconfined", "apparmor=unconfined"]
             run_kwargs["cap_add"] = ["SYS_ADMIN"]
             run_kwargs["environment"]["CLAUDE_SANDBOX_ENABLE_WEAKER_NESTED"] = "1"
 

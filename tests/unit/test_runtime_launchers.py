@@ -72,7 +72,7 @@ def test_docker_launcher_allows_opt_in_unconfined_seccomp(monkeypatch):
         )
     )
 
-    assert client.containers.run.call_args.kwargs["security_opt"] == ["seccomp=unconfined"]
+    assert client.containers.run.call_args.kwargs["security_opt"] == ["seccomp=unconfined", "apparmor=unconfined"]
     assert client.containers.run.call_args.kwargs["cap_add"] == ["SYS_ADMIN"]
     assert client.containers.run.call_args.kwargs["environment"]["CLAUDE_SANDBOX_ENABLE_WEAKER_NESTED"] == "1"
 
