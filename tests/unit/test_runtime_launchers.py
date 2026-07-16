@@ -20,8 +20,7 @@ pytestmark = pytest.mark.unit
 
 def test_docker_launcher_translates_spec_to_container_run(monkeypatch):
     monkeypatch.setattr("session_manager.runtime_launchers.sys.platform", "linux")
-    monkeypatch.delenv("ENABLE_SANDBOX", raising=False)
-    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("SANDBOX_MODE", raising=False)
     client = MagicMock()
     client.containers.get.side_effect = docker.errors.NotFound("missing")
     container = MagicMock()
@@ -56,9 +55,8 @@ def test_docker_launcher_translates_spec_to_container_run(monkeypatch):
     assert "cap_add" not in kwargs
 
 
-def test_docker_launcher_enables_nested_sandbox_without_ci_privileges(monkeypatch):
-    monkeypatch.setenv("ENABLE_SANDBOX", "true")
-    monkeypatch.delenv("CI", raising=False)
+def test_docker_launcher_uses_macos_sandbox_mode(monkeypatch):
+    monkeypatch.setenv("SANDBOX_MODE", "macos")
     client = MagicMock()
     client.containers.get.side_effect = docker.errors.NotFound("missing")
     container = MagicMock()
@@ -81,9 +79,8 @@ def test_docker_launcher_enables_nested_sandbox_without_ci_privileges(monkeypatc
     assert kwargs["environment"]["CLAUDE_SANDBOX_ENABLE_WEAKER_NESTED"] == "1"
 
 
-def test_docker_launcher_adds_ci_privileges_for_nested_sandbox(monkeypatch):
-    monkeypatch.setenv("ENABLE_SANDBOX", "true")
-    monkeypatch.setenv("CI", "true")
+def test_docker_launcher_uses_gha_sandbox_mode(monkeypatch):
+    monkeypatch.setenv("SANDBOX_MODE", "gha")
     client = MagicMock()
     client.containers.get.side_effect = docker.errors.NotFound("missing")
     container = MagicMock()
@@ -104,6 +101,31 @@ def test_docker_launcher_adds_ci_privileges_for_nested_sandbox(monkeypatch):
     assert kwargs["security_opt"] == ["seccomp=unconfined", "apparmor=unconfined"]
     assert kwargs["cap_add"] == ["SYS_ADMIN"]
     assert kwargs["environment"]["CLAUDE_SANDBOX_ENABLE_WEAKER_NESTED"] == "1"
+
+
+def test_docker_launcher_uses_gvisor_runtime_without_native_relaxations(monkeypatch):
+    monkeypatch.setenv("SANDBOX_MODE", "gvisor")
+    client = MagicMock()
+    client.containers.get.side_effect = docker.errors.NotFound("missing")
+    container = MagicMock()
+    container.id = "container-id"
+    container.short_id = "abc123"
+    client.containers.run.return_value = container
+
+    DockerRuntimeLauncher(client).launch(
+        RuntimeLaunchSpec(
+            task_id="task-12345678",
+            workflow="platform-test",
+            image="runtime:latest",
+            environment={},
+        )
+    )
+
+    kwargs = client.containers.run.call_args.kwargs
+    assert kwargs["runtime"] == "runsc"
+    assert "security_opt" not in kwargs
+    assert "cap_add" not in kwargs
+    assert "CLAUDE_SANDBOX_ENABLE_WEAKER_NESTED" not in kwargs["environment"]
 
 
 def test_docker_launcher_preserves_docker_desktop_host_routing(monkeypatch):

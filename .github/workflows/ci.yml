@@ -10,11 +10,6 @@ on:
         required: false
         default: false
         type: boolean
-      run_sandbox_tests:
-        description: Enable nested Claude sandbox tests with relaxed Docker isolation
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -63,8 +58,8 @@ jobs:
 
       - name: Run full test suite
         run: >-
-          make test-ci
-          ENABLE_SANDBOX=${{ inputs.run_sandbox_tests && 'true' || 'false' }}
+          make test
+          SANDBOX_MODE=gha
           PYTEST_FLAGS="-vv -ra${{ inputs.runtime_diagnostics && ' --durations=25' || '' }}"
         env:
           PYTHONUNBUFFERED: "1"

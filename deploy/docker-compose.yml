@@ -167,7 +167,7 @@ services:
       HOST_REPO_ROOT: ${PWD}
       DOCKER_HOST: unix:///var/run/docker.sock
       GATEWAY_EVENT_URL: http://gateway:8080/events
-      ENABLE_SANDBOX: ${ENABLE_SANDBOX:-false}
+      SANDBOX_MODE: ${SANDBOX_MODE:-}
     volumes:
       - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
       - ${HOST_WORKFLOW_REPO_PATH:-../examples/workflow-repo/workflows}:/app/workflows:ro

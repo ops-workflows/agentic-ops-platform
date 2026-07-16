@@ -21,15 +21,10 @@ from shared.lib.config import settings
 logger = logging.getLogger(__name__)
 
 DOCKER_NETWORK = "ai-ops-network"
-_TRUE_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
 
 
-def _sandbox_enabled() -> bool:
-    return os.environ.get("ENABLE_SANDBOX", "").strip().lower() in _TRUE_ENV_VALUES
-
-
-def _ci_enabled() -> bool:
-    return os.environ.get("CI", "").strip().lower() in _TRUE_ENV_VALUES
+def _sandbox_mode() -> str:
+    return os.environ.get("SANDBOX_MODE", "").strip().lower()
 
 
 @dataclass(frozen=True)
@@ -178,12 +173,16 @@ class DockerRuntimeLauncher:
         }
         if sys.platform == "linux":
             run_kwargs["extra_hosts"] = {"host.docker.internal": "host-gateway"}
-        if _sandbox_enabled():
+        sandbox_mode = _sandbox_mode()
+        if sandbox_mode == "macos":
             run_kwargs["security_opt"] = ["seccomp=unconfined"]
             run_kwargs["environment"]["CLAUDE_SANDBOX_ENABLE_WEAKER_NESTED"] = "1"
-            if _ci_enabled():
-                run_kwargs["security_opt"].append("apparmor=unconfined")
-                run_kwargs["cap_add"] = ["SYS_ADMIN"]
+        elif sandbox_mode == "gha":
+            run_kwargs["security_opt"] = ["seccomp=unconfined", "apparmor=unconfined"]
+            run_kwargs["cap_add"] = ["SYS_ADMIN"]
+            run_kwargs["environment"]["CLAUDE_SANDBOX_ENABLE_WEAKER_NESTED"] = "1"
+        elif sandbox_mode == "gvisor":
+            run_kwargs["runtime"] = "runsc"
 
         container = self.client.containers.run(**run_kwargs)
         return RuntimeHandle(
