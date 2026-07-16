@@ -162,3 +162,30 @@ def test_parse_question_response_out_of_range_falls_through():
     question = {"question": "Which?", "options": [{"label": "A"}]}
     # "5" is out of range, so it falls through to free-text
     assert sep._parse_question_response("5", question) == "5"
+
+
+@pytest.mark.asyncio
+async def test_resume_admission_accepts_direct_running_transition(monkeypatch):
+    """The scheduler may consume resume_pending before the runtime polls it."""
+
+    sep = _get_sep()
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, str]:
+            return {"status": "running"}
+
+    class FakeClient:
+        async def get(self, *_args, **_kwargs):
+            return FakeResponse()
+
+    async def fake_get_client():
+        return FakeClient()
+
+    monkeypatch.setattr(sep, "_get_client", fake_get_client)
+
+    await sep._wait_for_resume_admission(reason="user_input", timeout_sec=1)

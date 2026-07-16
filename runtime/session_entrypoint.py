@@ -1329,7 +1329,6 @@ async def _wait_for_resume_admission(*, reason: str, timeout_sec: int = 3600) ->
     client = await _get_client()
     deadline = time.monotonic() + timeout_sec
     terminal_statuses = {"failed", "lost", "timed_out", "succeeded"}
-    observed_resume_pending = False
 
     while time.monotonic() < deadline:
         try:
@@ -1345,9 +1344,7 @@ async def _wait_for_resume_admission(*, reason: str, timeout_sec: int = 3600) ->
             continue
 
         status = str(payload.get("status") or "").strip().lower()
-        if status == "resume_pending":
-            observed_resume_pending = True
-        if status == "running" and observed_resume_pending:
+        if status == "running":
             return
         if status in terminal_statuses:
             raise RuntimeError(f"Task left wait-resume flow while waiting for scheduler admission: {status}")

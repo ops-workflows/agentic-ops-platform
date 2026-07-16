@@ -28,6 +28,117 @@ The ephemeral per-task Docker container is one isolation layer, but it is not
 the only one — the Claude-native permission and sandbox rules are the first
 policy layer for agent behavior.
 
+## Runtime isolation layers
+
+Claude Code, the runtime container, and the host each enforce a different
+boundary. They are complementary; no one layer replaces the others.
+
+### Claude Code and Bubblewrap
+
+[Claude Code's sandbox](https://code.claude.com/docs/en/sandboxing) is an
+operating-system-enforced boundary for the `Bash` tool and every process Bash
+starts. On Linux, Claude Code uses
+[Bubblewrap](https://github.com/containers/bubblewrap) to construct a namespace
+with an explicit filesystem view, restricted writable paths, and controlled
+network access. Its permission rules still govern all tools before they run,
+including MCP, Read, Edit, and WebFetch.
+
+This is deliberately **not** a sandbox for the Claude Code harness or for the
+runtime container as a whole. Built-in file tools use Claude's permission
+system, and the parent Claude process retains its normal container privileges.
+The credential deny-list below therefore prevents a sandboxed Bash process from
+reading a secret; it does not make that secret unavailable to the trusted
+runtime process that needs it for MCP authentication.
+
+Bubblewrap is a low-level sandbox constructor, not a complete security policy.
+It uses Linux facilities such as mount and user namespaces to create the inner
+environment, so its availability depends on the outer runtime permitting those
+operations. In particular, an unprivileged container must be able to create the
+namespaces Bubblewrap needs. Treat a failure to initialize the Claude sandbox as
+a deployment configuration failure in production; configure Claude Code to fail
+closed rather than silently running Bash outside the sandbox.
+
+### gVisor for the runtime container
+
+[gVisor](https://gvisor.dev/) is the recommended outer isolation boundary for
+untrusted agent-session containers. Docker selects it through its `runsc` OCI
+runtime. Instead of letting the container directly exercise the host kernel as
+an ordinary OCI container does, gVisor interposes a user-space application
+kernel between the workload and the host. This substantially reduces the host
+kernel attack surface exposed to a compromised container, while retaining the
+container's normal filesystem, process, and network model.
+
+gVisor is not a VM and does not replace deployment policy. Operators must still
+minimize mounts, avoid Docker sockets and host paths, use non-root runtime
+users, constrain egress, apply resource limits, and keep images and gVisor
+patched. The Compose deployment selects `runsc` only for ephemeral agent
+session containers when `SANDBOX_MODE=gvisor`; the long-running platform
+services continue to use their configured Docker runtime.
+
+Together, the layers look like this:
+
+```text
+host kernel
+  -> gVisor/runsc isolates the agent-session container
+    -> Claude Code/Bubblewrap isolates Bash and its child processes
+      -> permission and credential rules constrain individual tool use
+```
+
+The outer gVisor layer protects the host from a container compromise. The inner
+Bubblewrap layer narrows what model-directed shell commands can access inside an
+otherwise valid session container. Both layers need compatibility testing for
+the selected gVisor release and Claude Code version.
+
+### Providing an outer sandbox
+
+**Linux VM with Docker Compose.** Install a supported `runsc` binary using the
+[gVisor installation guide](https://gvisor.dev/docs/user_guide/install/), then
+register it with Docker and restart Docker:
+
+```sh
+sudo runsc install
+sudo systemctl restart docker
+docker run --runtime=runsc --rm hello-world
+```
+
+After `make bootstrap`, start the platform with:
+
+```sh
+SANDBOX_MODE=gvisor make up-auto
+```
+
+The session manager then requests `runtime="runsc"` for each agent-session
+container. Keep `runsc` as an explicitly selected runtime rather than changing
+Docker's global default unless every workload on the VM has been qualified for
+it.
+
+**Kubernetes.** A plain Pod is not an agent-sandbox product by itself. On GKE,
+[GKE Agent Sandbox](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/machine-learning/agent-sandbox)
+is a managed implementation designed for isolated, stateful agent workloads;
+it uses the open-source Agent Sandbox controller and supports hardened runtimes
+such as gVisor. For other Kubernetes distributions, evaluate and operate the
+[Kubernetes Agent Sandbox](https://kubernetes.io/blog/2026/03/20/running-agents-on-kubernetes-with-agent-sandbox/)
+CRDs plus a compatible runtime such as gVisor or Kata Containers. Confirm that
+the cluster's pod security, seccomp, AppArmor, and user-namespace policies also
+allow the desired inner Bubblewrap behavior before treating the configuration as
+production-ready.
+
+**Cloud Run.**
+[Cloud Run sandboxes](https://cloud.google.com/blog/topics/developers-practitioners/google-cloud-run-sandboxes-are-in-public-preview)
+are in public preview and provide a platform-managed execution boundary with
+credential/environment isolation, deny-by-default egress, and a temporary
+filesystem overlay. They are promising for untrusted code execution, but this
+platform has not yet qualified Claude Code's Bubblewrap sandbox inside them.
+
+**Local development.**
+[Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) provide a separate
+microVM-based local environment with its own Docker daemon, filesystem, and
+network. They can be explored on supported macOS or Windows developer machines;
+organization governance features require the relevant Docker subscription. This
+platform has not yet qualified Claude Code/Bubblewrap inside Docker Sandboxes,
+so do not rely on that combination for production isolation without a dedicated
+compatibility test.
+
 ## Sandbox credential deny-list
 
 Runtime containers must give the model shell access to Bash while never
