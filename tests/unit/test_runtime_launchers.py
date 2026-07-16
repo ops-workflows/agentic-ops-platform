@@ -20,7 +20,8 @@ pytestmark = pytest.mark.unit
 
 def test_docker_launcher_translates_spec_to_container_run(monkeypatch):
     monkeypatch.setattr("session_manager.runtime_launchers.sys.platform", "linux")
-    monkeypatch.delenv("RUNTIME_SECCOMP_UNCONFINED", raising=False)
+    monkeypatch.delenv("ENABLE_SANDBOX", raising=False)
+    monkeypatch.delenv("CI", raising=False)
     client = MagicMock()
     client.containers.get.side_effect = docker.errors.NotFound("missing")
     container = MagicMock()
@@ -52,10 +53,12 @@ def test_docker_launcher_translates_spec_to_container_run(monkeypatch):
     assert kwargs["extra_hosts"] == {"host.docker.internal": "host-gateway"}
     assert kwargs["labels"]["agentic_ops.runtime_provider"] == "docker"
     assert "security_opt" not in kwargs
+    assert "cap_add" not in kwargs
 
 
-def test_docker_launcher_allows_opt_in_unconfined_seccomp(monkeypatch):
-    monkeypatch.setenv("RUNTIME_SECCOMP_UNCONFINED", "true")
+def test_docker_launcher_enables_nested_sandbox_without_ci_privileges(monkeypatch):
+    monkeypatch.setenv("ENABLE_SANDBOX", "true")
+    monkeypatch.delenv("CI", raising=False)
     client = MagicMock()
     client.containers.get.side_effect = docker.errors.NotFound("missing")
     container = MagicMock()
@@ -72,9 +75,35 @@ def test_docker_launcher_allows_opt_in_unconfined_seccomp(monkeypatch):
         )
     )
 
-    assert client.containers.run.call_args.kwargs["security_opt"] == ["seccomp=unconfined", "apparmor=unconfined"]
-    assert client.containers.run.call_args.kwargs["cap_add"] == ["SYS_ADMIN"]
-    assert client.containers.run.call_args.kwargs["environment"]["CLAUDE_SANDBOX_ENABLE_WEAKER_NESTED"] == "1"
+    kwargs = client.containers.run.call_args.kwargs
+    assert kwargs["security_opt"] == ["seccomp=unconfined"]
+    assert "cap_add" not in kwargs
+    assert kwargs["environment"]["CLAUDE_SANDBOX_ENABLE_WEAKER_NESTED"] == "1"
+
+
+def test_docker_launcher_adds_ci_privileges_for_nested_sandbox(monkeypatch):
+    monkeypatch.setenv("ENABLE_SANDBOX", "true")
+    monkeypatch.setenv("CI", "true")
+    client = MagicMock()
+    client.containers.get.side_effect = docker.errors.NotFound("missing")
+    container = MagicMock()
+    container.id = "container-id"
+    container.short_id = "abc123"
+    client.containers.run.return_value = container
+
+    DockerRuntimeLauncher(client).launch(
+        RuntimeLaunchSpec(
+            task_id="task-12345678",
+            workflow="platform-test",
+            image="runtime:latest",
+            environment={},
+        )
+    )
+
+    kwargs = client.containers.run.call_args.kwargs
+    assert kwargs["security_opt"] == ["seccomp=unconfined", "apparmor=unconfined"]
+    assert kwargs["cap_add"] == ["SYS_ADMIN"]
+    assert kwargs["environment"]["CLAUDE_SANDBOX_ENABLE_WEAKER_NESTED"] == "1"
 
 
 def test_docker_launcher_preserves_docker_desktop_host_routing(monkeypatch):

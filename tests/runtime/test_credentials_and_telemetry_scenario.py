@@ -13,12 +13,19 @@ Requires Docker + ``ai-ops-agent-runtime:latest`` + TEST_RUNTIME_ENABLED=1.
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
 from tests.fakes.mock_llm import Turn
 
 pytestmark = pytest.mark.scenario
+
+_TRUE_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
+def _sandbox_enabled() -> bool:
+    return os.environ.get("ENABLE_SANDBOX", "").strip().lower() in _TRUE_ENV_VALUES
 
 
 # ─── §2.10.1 ${VAR} expansion + secret isolation from LLM body ───
@@ -82,6 +89,10 @@ async def test_secret_var_expanded_in_mcp_header_and_isolated_from_llm(
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    os.environ.get("CI", "").strip().lower() == "true" and not _sandbox_enabled(),
+    reason="CI sandbox test is disabled; use GitHub Actions workflow_dispatch with run_sandbox_tests enabled",
+)
 async def test_secret_var_denied_in_sandboxed_bash(
     require_runtime,
     mock_llm,

@@ -24,8 +24,12 @@ DOCKER_NETWORK = "ai-ops-network"
 _TRUE_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
 
 
-def _runtime_seccomp_unconfined_enabled() -> bool:
-    return os.environ.get("RUNTIME_SECCOMP_UNCONFINED", "").strip().lower() in _TRUE_ENV_VALUES
+def _sandbox_enabled() -> bool:
+    return os.environ.get("ENABLE_SANDBOX", "").strip().lower() in _TRUE_ENV_VALUES
+
+
+def _ci_enabled() -> bool:
+    return os.environ.get("CI", "").strip().lower() in _TRUE_ENV_VALUES
 
 
 @dataclass(frozen=True)
@@ -174,10 +178,12 @@ class DockerRuntimeLauncher:
         }
         if sys.platform == "linux":
             run_kwargs["extra_hosts"] = {"host.docker.internal": "host-gateway"}
-        if _runtime_seccomp_unconfined_enabled():
-            run_kwargs["security_opt"] = ["seccomp=unconfined", "apparmor=unconfined"]
-            run_kwargs["cap_add"] = ["SYS_ADMIN"]
+        if _sandbox_enabled():
+            run_kwargs["security_opt"] = ["seccomp=unconfined"]
             run_kwargs["environment"]["CLAUDE_SANDBOX_ENABLE_WEAKER_NESTED"] = "1"
+            if _ci_enabled():
+                run_kwargs["security_opt"].append("apparmor=unconfined")
+                run_kwargs["cap_add"] = ["SYS_ADMIN"]
 
         container = self.client.containers.run(**run_kwargs)
         return RuntimeHandle(
