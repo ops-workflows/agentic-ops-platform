@@ -22,7 +22,7 @@ import httpx
 
 HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://hindsight:8888")
 GATEWAY_EVENT_URL = os.environ.get("GATEWAY_EVENT_URL", "")
-RECALL_TIMEOUT = 10.0  # seconds — keep under Claude Code's 12s hook budget
+RECALL_TIMEOUT = 20.0  # seconds — leave time for bank lookup and event reporting within the hook's 30s budget
 RECALL_LIMIT = 3
 MAX_QUERY_CHARS = 800
 HINDSIGHT_BANKS_PREFIX = "/v1/default/banks"

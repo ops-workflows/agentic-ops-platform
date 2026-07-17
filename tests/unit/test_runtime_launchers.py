@@ -21,6 +21,7 @@ pytestmark = pytest.mark.unit
 def test_docker_launcher_translates_spec_to_container_run(monkeypatch):
     monkeypatch.setattr("session_manager.runtime_launchers.sys.platform", "linux")
     monkeypatch.delenv("SANDBOX_MODE", raising=False)
+    monkeypatch.setenv("DOCKER_NETWORK", "test-network")
     client = MagicMock()
     client.containers.get.side_effect = docker.errors.NotFound("missing")
     container = MagicMock()
@@ -49,6 +50,7 @@ def test_docker_launcher_translates_spec_to_container_run(monkeypatch):
     assert kwargs["environment"] == {"A": "1"}
     assert kwargs["volumes"]["/workflows/platform-test"] == {"bind": "/plugin-src", "mode": "ro"}
     assert kwargs["volumes"]["agent-memory-platform-test"] == {"bind": "/memory", "mode": "rw"}
+    assert kwargs["network"] == "test-network"
     assert kwargs["extra_hosts"] == {"host.docker.internal": "host-gateway"}
     assert kwargs["labels"]["agentic_ops.runtime_provider"] == "docker"
     assert "security_opt" not in kwargs

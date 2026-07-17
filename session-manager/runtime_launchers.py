@@ -20,11 +20,15 @@ from shared.lib.config import settings
 
 logger = logging.getLogger(__name__)
 
-DOCKER_NETWORK = "ai-ops-network"
+DEFAULT_DOCKER_NETWORK = "ai-ops-network"
 
 
 def _sandbox_mode() -> str:
     return os.environ.get("SANDBOX_MODE", "").strip().lower()
+
+
+def _docker_network() -> str:
+    return os.environ.get("DOCKER_NETWORK", DEFAULT_DOCKER_NETWORK).strip() or DEFAULT_DOCKER_NETWORK
 
 
 @dataclass(frozen=True)
@@ -161,7 +165,7 @@ class DockerRuntimeLauncher:
             "image": spec.image,
             "environment": _environment_with_bundle_contract(spec, mounted_bundle_path=mounted_bundle_path),
             "volumes": volumes,
-            "network": DOCKER_NETWORK,
+            "network": _docker_network(),
             "detach": True,
             "name": container_name,
             "labels": {

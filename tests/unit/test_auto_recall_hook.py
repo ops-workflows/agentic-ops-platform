@@ -87,3 +87,27 @@ def test_auto_recall_runs_only_once_per_task(monkeypatch, tmp_path):
         for url, body in calls
         if url.endswith("/events")
     )
+
+
+def test_auto_recall_timeout_is_fail_open(monkeypatch, tmp_path):
+    monkeypatch.setenv("TASK_ID", "task-timeout")
+    monkeypatch.setenv("TASK_WORKFLOW", "platform-test")
+    hook = _load_auto_recall_hook_module()
+    monkeypatch.setattr(hook.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(hook, "resolve_bank_id", lambda workflow: "test-bank")
+
+    def fake_post(url: str, json: dict, timeout: float):
+        if url.endswith("/memories/recall"):
+            assert timeout == 20.0
+            raise hook.httpx.TimeoutException("timed out")
+        return _Response({})
+
+    monkeypatch.setattr(hook.httpx, "post", fake_post)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"prompt": "Investigate alert"})))
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with redirect_stdout(stdout), redirect_stderr(stderr):
+        hook.main()
+
+    assert stdout.getvalue() == ""
+    assert "Hindsight auto-recall timed out" in stderr.getvalue()

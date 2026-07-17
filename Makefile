@@ -12,6 +12,7 @@ RUNTIME_IMAGE ?= ai-ops-agent-runtime:latest
 RUNTIME_BUILD ?= docker build
 SANDBOX_MODE ?= macos
 COMPOSE_PROJECT_NAME ?= aiops-test
+TEST_DOCKER_NETWORK ?= $(COMPOSE_PROJECT_NAME)-network
 COMPOSE_BOOTSTRAP_ENV_FILE ?= compose.env
 WORKFLOW_COMPOSE_ENV_FILE ?= $(shell sed -n 's/^WORKFLOW_COMPOSE_ENV_FILE=//p' "$(COMPOSE_BOOTSTRAP_ENV_FILE)" 2>/dev/null | tail -1)
 HOST_PLATFORM_CONFIG_FILE ?= $(shell sed -n 's/^HOST_PLATFORM_CONFIG_FILE=//p' "$(COMPOSE_BOOTSTRAP_ENV_FILE)" 2>/dev/null | tail -1)
@@ -19,7 +20,7 @@ COMPOSE_ENV_FILES := $(if $(wildcard $(WORKFLOW_COMPOSE_ENV_FILE)),--env-file "$
 COMPOSE ?= docker compose $(COMPOSE_ENV_FILES) -f deploy/docker-compose.yml
 # Compose interpolates every service before starting the requested one. The test
 # database only starts Postgres, so provide inert values for runtime-only secrets.
-TEST_COMPOSE ?= AGE_IDENTITY=test-only-not-a-real-age-key LLM_API_KEY=test-only-not-a-real-llm-key PG_PORT=$(TEST_PG_PORT) docker compose --project-name $(COMPOSE_PROJECT_NAME) -f deploy/docker-compose.yml
+TEST_COMPOSE ?= AGE_IDENTITY=test-only-not-a-real-age-key LLM_API_KEY=test-only-not-a-real-llm-key PG_PORT=$(TEST_PG_PORT) DOCKER_NETWORK=$(TEST_DOCKER_NETWORK) docker compose --project-name $(COMPOSE_PROJECT_NAME) -f deploy/docker-compose.yml
 
 .PHONY: help unit-tests service-tests runtime-tests test \
 	ensure-test-db up up-auto compose-build runtime-build clean-test-containers \
@@ -75,12 +76,12 @@ service-tests: ensure-test-db ## Run service/Postgres tests
 	TEST_DATABASE_URL='$(TEST_DATABASE_URL)' $(PYTEST) tests/service $(PYTEST_FLAGS)
 
 runtime-tests: ensure-test-db runtime-build ## Run runtime scenario tests (Postgres + Docker required)
-	TEST_DATABASE_URL='$(TEST_DATABASE_URL)' TEST_RUNTIME_ENABLED=1 SANDBOX_MODE=$(SANDBOX_MODE) \
+	TEST_DATABASE_URL='$(TEST_DATABASE_URL)' TEST_RUNTIME_ENABLED=1 SANDBOX_MODE=$(SANDBOX_MODE) DOCKER_NETWORK=$(TEST_DOCKER_NETWORK) \
 		COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) \
 		$(PYTEST) tests/runtime $(PYTEST_TIMEOUT_FLAGS) $(PYTEST_FLAGS)
 
 test: ensure-test-db runtime-build ## Run all three suites (unit + service + runtime)
-	TEST_DATABASE_URL='$(TEST_DATABASE_URL)' TEST_RUNTIME_ENABLED=1 SANDBOX_MODE=$(SANDBOX_MODE) \
+	TEST_DATABASE_URL='$(TEST_DATABASE_URL)' TEST_RUNTIME_ENABLED=1 SANDBOX_MODE=$(SANDBOX_MODE) DOCKER_NETWORK=$(TEST_DOCKER_NETWORK) \
 		COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) \
 		$(PYTEST) tests $(PYTEST_FLAGS)
 

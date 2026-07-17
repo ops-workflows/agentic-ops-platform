@@ -71,6 +71,17 @@ def test_reminder_suppressed_when_result_text_present():
     assert should is False
 
 
+def test_terminal_error_prefers_captured_model_response():
+    sep = _get_sep()
+    assert (
+        sep._terminal_error_text(
+            "Claude Code returned an error result: success",
+            {"last_result_text": "API Error: model context exceeded"},
+        )
+        == "API Error: model context exceeded"
+    )
+
+
 def test_reminder_suppressed_below_min_turns():
     sep = _get_sep()
     # MIN_TURNS env was set to 5 above.

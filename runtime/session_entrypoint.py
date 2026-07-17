@@ -103,6 +103,7 @@ MESSAGE_BUS_API_URL = os.environ.get("MESSAGE_BUS_API_URL", "")
 MESSAGE_BUS_PROVIDER = os.environ.get("MESSAGE_BUS_PROVIDER", "mattermost").strip().lower() or "mattermost"
 MAX_TURNS = int(os.environ.get("MAX_TURNS", "50"))
 RUNTIME_TIMEOUT_SEC = int(os.environ.get("RUNTIME_TIMEOUT_SEC", "0") or "0")
+MAX_THINKING_TOKENS = max(0, int(os.environ.get("MAX_THINKING_TOKENS", "0") or "0"))
 MESSAGE_CHANNEL_ID = str(TASK_METADATA.get("channel_id") or os.environ.get("MESSAGE_CHANNEL_ID", ""))
 MESSAGE_TEAM_ID = str(TASK_METADATA.get("team_id") or os.environ.get("MESSAGE_TEAM_ID", ""))
 MESSAGE_TEAM_NAME = str(
@@ -498,6 +499,14 @@ def _build_terminal_event_payload(progress_state: dict[str, Any], *, error: str)
         payload.update(large_parts)
 
     return payload
+
+
+def _terminal_error_text(error: str, progress_state: dict[str, Any]) -> str:
+    """Prefer the model response when the SDK emits an unhelpful result subtype."""
+    if "Claude Code returned an error result" not in error:
+        return error
+    result_text = str(progress_state.get("last_result_text") or "").strip()
+    return result_text or error
 
 
 # ─── Approval Gate (can_use_tool) ────────────────────────────────────────────
@@ -1518,6 +1527,8 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
         cli_path=claude_cli_path,
         permission_mode=permission_mode,
     )
+    if MAX_THINKING_TOKENS:
+        options.max_thinking_tokens = MAX_THINKING_TOKENS
 
     project_mcp_servers = _load_project_mcp_servers_config()
     if project_mcp_servers is not None:
@@ -1978,7 +1989,10 @@ async def main():
         raise
     except Exception as e:
         logger.error("Error: %s", e)
-        await report_event("session_error", _build_terminal_event_payload(progress_state, error=str(e)))
+        await report_event(
+            "session_error",
+            _build_terminal_event_payload(progress_state, error=_terminal_error_text(str(e), progress_state)),
+        )
         raise
     finally:
         heartbeat_task.cancel()

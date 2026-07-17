@@ -66,11 +66,17 @@ def _configure_google_application_credentials() -> None:
     if not service_account_json:
         return
     try:
-        json.loads(service_account_json)
+        credentials = json.loads(service_account_json)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("GCP_SERVICE_ACCOUNT_JSON must contain valid service-account JSON") from exc
+        try:
+            credentials = json.loads(service_account_json, strict=False)
+        except json.JSONDecodeError:
+            raise RuntimeError("GCP_SERVICE_ACCOUNT_JSON must contain valid service-account JSON") from exc
+        logger.warning("Normalizing literal control characters in GCP_SERVICE_ACCOUNT_JSON")
+    if not isinstance(credentials, dict):
+        raise RuntimeError("GCP_SERVICE_ACCOUNT_JSON must contain a service-account JSON object")
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8") as credentials_file:
-        credentials_file.write(service_account_json)
+        json.dump(credentials, credentials_file)
     credentials_path = credentials_file.name
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
     atexit.register(lambda: os.path.exists(credentials_path) and os.unlink(credentials_path))
@@ -176,6 +182,23 @@ async def _create_task(
         logger.info("Created task %s from Pub/Sub message", task.id)
 
 
+def _subscriber_callback(loop: asyncio.AbstractEventLoop, config: dict[str, Any]):
+    def callback(message) -> None:
+        payload, payload_text = _decode_payload(message.data)
+        try:
+            future = asyncio.run_coroutine_threadsafe(
+                _create_task(payload, payload_text, dict(message.attributes or {}), config), loop
+            )
+            future.result()
+        except Exception as exc:
+            logger.exception("Failed to create task from Pub/Sub message %s: %s", message.message_id, exc)
+            message.nack()
+            return
+        message.ack()
+
+    return callback
+
+
 async def run_subscriber(config: dict[str, Any]) -> None:
     from google.cloud import pubsub_v1
 
@@ -191,18 +214,8 @@ async def run_subscriber(config: dict[str, Any]) -> None:
         subscription if subscription.startswith("projects/") else subscriber.subscription_path(project, subscription)
     )
 
-    def callback(message) -> None:
-        payload, payload_text = _decode_payload(message.data)
-        try:
-            asyncio.run(_create_task(payload, payload_text, dict(message.attributes or {}), config))
-        except Exception as exc:
-            logger.exception("Failed to create task from Pub/Sub message %s: %s", message.message_id, exc)
-            message.nack()
-            return
-        message.ack()
-
     logger.info("Starting Pub/Sub subscriber: %s", subscription_path)
-    future = subscriber.subscribe(subscription_path, callback=callback)
+    future = subscriber.subscribe(subscription_path, callback=_subscriber_callback(asyncio.get_running_loop(), config))
     try:
         while not _shutdown:
             await asyncio.sleep(1)

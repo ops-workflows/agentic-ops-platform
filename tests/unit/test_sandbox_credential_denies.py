@@ -91,6 +91,7 @@ async def test_run_agent_session_passes_project_mcp_config_and_cli_path_to_sdk(t
     monkeypatch.setattr(session_entrypoint, "PLUGIN_DIR", tmp_path)
     monkeypatch.setattr(session_entrypoint, "CLAUDE_SETTINGS_PATH", claude_settings_path)
     monkeypatch.setattr(session_entrypoint, "MAX_TURNS", 1)
+    monkeypatch.setattr(session_entrypoint, "MAX_THINKING_TOKENS", 8192)
     monkeypatch.setattr(
         session_entrypoint.shutil,
         "which",
@@ -104,6 +105,7 @@ async def test_run_agent_session_passes_project_mcp_config_and_cli_path_to_sdk(t
         captured["cwd"] = options.cwd
         captured["cli_path"] = options.cli_path
         captured["extra_args"] = dict(options.extra_args)
+        captured["max_thinking_tokens"] = options.max_thinking_tokens
         if False:
             yield None
 
@@ -133,6 +135,7 @@ async def test_run_agent_session_passes_project_mcp_config_and_cli_path_to_sdk(t
         "cwd": str(tmp_path),
         "cli_path": "/usr/local/bin/claude",
         "extra_args": {"agent": "platform-test-coordinator"},
+        "max_thinking_tokens": 8192,
     }
 
 

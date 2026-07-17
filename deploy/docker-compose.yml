@@ -166,6 +166,7 @@ services:
       RUNTIME_BUNDLE_ROOT: ${RUNTIME_BUNDLE_ROOT:-/tmp/agentic-ops-runtime-bundles}
       HOST_REPO_ROOT: ${PWD}
       DOCKER_HOST: unix:///var/run/docker.sock
+      DOCKER_NETWORK: ${DOCKER_NETWORK:-ai-ops-network}
       GATEWAY_EVENT_URL: http://gateway:8080/events
       SANDBOX_MODE: ${SANDBOX_MODE:-}
     volumes:
@@ -370,5 +371,5 @@ volumes:
 
 networks:
   ai-ops-network:
-    name: ai-ops-network
+    name: ${DOCKER_NETWORK:-ai-ops-network}
     driver: bridge
