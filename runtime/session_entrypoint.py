@@ -103,7 +103,6 @@ MESSAGE_BUS_API_URL = os.environ.get("MESSAGE_BUS_API_URL", "")
 MESSAGE_BUS_PROVIDER = os.environ.get("MESSAGE_BUS_PROVIDER", "mattermost").strip().lower() or "mattermost"
 MAX_TURNS = int(os.environ.get("MAX_TURNS", "50"))
 RUNTIME_TIMEOUT_SEC = int(os.environ.get("RUNTIME_TIMEOUT_SEC", "0") or "0")
-MAX_THINKING_TOKENS = max(0, int(os.environ.get("MAX_THINKING_TOKENS", "0") or "0"))
 MESSAGE_CHANNEL_ID = str(TASK_METADATA.get("channel_id") or os.environ.get("MESSAGE_CHANNEL_ID", ""))
 MESSAGE_TEAM_ID = str(TASK_METADATA.get("team_id") or os.environ.get("MESSAGE_TEAM_ID", ""))
 MESSAGE_TEAM_NAME = str(
@@ -1527,8 +1526,6 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
         cli_path=claude_cli_path,
         permission_mode=permission_mode,
     )
-    if MAX_THINKING_TOKENS:
-        options.max_thinking_tokens = MAX_THINKING_TOKENS
 
     project_mcp_servers = _load_project_mcp_servers_config()
     if project_mcp_servers is not None:
