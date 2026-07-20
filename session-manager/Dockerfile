@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends tar && rm -rf /
 
 # Install Python dependencies
 COPY pyproject.toml .
-RUN pip install --no-cache-dir ".[dev]"
+RUN pip install --no-cache-dir ".[dev,connectors]"
 
 # Copy shared library and session manager
 COPY shared/ ./shared/

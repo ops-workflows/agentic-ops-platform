@@ -110,6 +110,12 @@ export default function WorkflowRepoPage() {
         <p className="text-sm text-[var(--color-error)]">{error}</p>
       ) : null}
 
+      <p className="border-l-2 border-[var(--color-info)]/50 pl-3 text-sm text-[var(--color-text-tertiary)]">
+        Sync activates workflow bundles and repo-owned per-task settings for new
+        tasks. MCP or connector enablement changes are not applied by Sync; for
+        local Compose, run <code>make down &amp;&amp; make up</code>.
+      </p>
+
       {!loading && status ? (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
           <article className="rounded-card border border-ops-border bg-ops-surface p-5">

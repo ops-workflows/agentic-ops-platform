@@ -4,6 +4,8 @@ bundle/platform compatibility policy.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from shared.lib.workflow_paths import _authenticated_repo_url
@@ -55,3 +57,85 @@ def test_bundle_major_older_than_platform_is_a_warning():
 def test_unparseable_versions_are_treated_as_ok():
     assert check_bundle_compatibility("unknown", "1.0.0") == COMPATIBILITY_OK
     assert check_bundle_compatibility("1.0.0", "unknown") == COMPATIBILITY_OK
+
+
+def test_publish_platform_config_snapshot_uses_local_repo_config(monkeypatch, tmp_path):
+    from shared.lib import workflow_repo_sync as sync_mod
+    from shared.lib.config import settings
+
+    source = tmp_path / "platform-config.yaml"
+    source.write_text("default_model_profile: synced\n", encoding="utf-8")
+    bundle_root = tmp_path / "bundles"
+    monkeypatch.setattr(settings, "workflow_repo_url", "")
+    monkeypatch.setattr(settings, "workflow_repo_source", "local")
+    monkeypatch.setattr(settings, "platform_config_file", str(source))
+
+    snapshot = sync_mod._publish_platform_config_snapshot(bundle_root)
+
+    assert snapshot == bundle_root / "platform-config.yaml"
+    assert snapshot.read_text(encoding="utf-8") == "default_model_profile: synced\n"
+
+
+def test_publish_platform_config_snapshot_uses_checked_out_remote_repo(monkeypatch, tmp_path):
+    from shared.lib import workflow_repo_sync as sync_mod
+    from shared.lib.config import settings
+
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "platform-config.yaml").write_text("default_model_profile: pinned\n", encoding="utf-8")
+    monkeypatch.setattr(settings, "workflow_repo_url", "https://github.com/acme/workflows.git")
+    monkeypatch.setattr(settings, "workflow_repo_source", "github")
+    monkeypatch.setattr(settings, "workflow_repo_local_path", str(checkout))
+
+    snapshot = sync_mod._publish_platform_config_snapshot(tmp_path / "bundles")
+
+    assert snapshot.read_text(encoding="utf-8") == "default_model_profile: pinned\n"
+
+
+def test_publish_object_store_release_advances_pointer_after_manifest(monkeypatch, tmp_path):
+    from shared.lib import workflow_repo_sync as sync_mod
+
+    config = tmp_path / "platform-config.yaml"
+    config.write_text("default_model_profile: synced\n", encoding="utf-8")
+    uploads: list[tuple[str, str, bytes]] = []
+    monkeypatch.setattr(
+        sync_mod,
+        "upload_bytes",
+        lambda bucket, key, data, *, content_type="application/octet-stream": uploads.append((bucket, key, data)),
+    )
+
+    sync_mod._publish_object_store_release(
+        bucket="agentic-ops-bundles",
+        release_id="commit-123",
+        platform_config=config,
+        bundles={"platform-test": {"key": "releases/commit-123/bundles/platform-test.tar.gz", "checksum": "sha256:x"}},
+        commit="commit-123",
+        effective_ref="v1.0.0",
+    )
+
+    assert [key for _, key, _ in uploads] == [
+        "releases/commit-123/platform-config.yaml",
+        "releases/commit-123/manifest.json",
+        "releases/active.json",
+    ]
+    assert json.loads(uploads[-1][2]) == {"manifest_key": "releases/commit-123/manifest.json"}
+
+
+def test_release_id_is_unique_for_repeated_syncs_at_the_same_commit(monkeypatch):
+    from datetime import UTC, datetime
+
+    from shared.lib import workflow_repo_sync as sync_mod
+
+    timestamps = iter(
+        [
+            datetime(2026, 5, 8, 12, 0, 0, 1, tzinfo=UTC),
+            datetime(2026, 5, 8, 12, 0, 0, 2, tzinfo=UTC),
+        ]
+    )
+    monkeypatch.setattr(sync_mod, "datetime", type("Clock", (), {"now": lambda tz: next(timestamps)}))
+
+    first = sync_mod._release_id(commit="0123456789abcdef", effective_ref="main")
+    second = sync_mod._release_id(commit="0123456789abcdef", effective_ref="main")
+
+    assert first.startswith("0123456789ab-")
+    assert first != second

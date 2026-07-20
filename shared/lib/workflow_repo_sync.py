@@ -9,7 +9,11 @@ and (if object storage is configured) re-upload them.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import shutil
+import tempfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.lib.config import settings
 from shared.lib.models import WorkflowRepoState
+from shared.lib.object_store import upload_bytes
 from shared.lib.workflow_bundles import (
     WorkflowRepoMetadata,
     build_workflow_bundle,
@@ -31,6 +36,7 @@ from shared.lib.workflow_paths import configured_workflow_roots, discover_workfl
 logger = logging.getLogger(__name__)
 
 WORKFLOW_REPO_STATE_ID = 1
+RELEASES_PREFIX = "releases"
 
 # Compatibility policy: a bundle built with a platform major version newer
 # than the running platform cannot be assumed to work (the running platform
@@ -98,6 +104,75 @@ def _effective_ref(pinned_ref: str | None) -> str | None:
     return ref or None
 
 
+def _platform_config_source_path() -> Path:
+    """Return the repo-owned platform config selected by the current sync mode."""
+    if settings.workflow_repo_url.strip() and settings.workflow_repo_source.strip().lower() != "local":
+        return Path(settings.workflow_repo_local_path).expanduser() / "platform-config.yaml"
+    return Path(settings.platform_config_file or settings.platform_secrets_file).expanduser()
+
+
+def _publish_platform_config_snapshot(bundle_root: Path) -> Path:
+    """Atomically publish the synced repo config used for new task launches."""
+    source = _platform_config_source_path()
+    if not source.is_file():
+        raise FileNotFoundError(f"Workflow repo platform config was not found: {source}")
+
+    bundle_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(prefix=".platform-config-", dir=bundle_root, delete=False) as temp_file:
+        temporary_path = Path(temp_file.name)
+    try:
+        shutil.copy2(source, temporary_path)
+        temporary_path.replace(bundle_root / "platform-config.yaml")
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+    return bundle_root / "platform-config.yaml"
+
+
+def _release_id(*, commit: str, effective_ref: str | None) -> str:
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    if commit:
+        return f"{commit[:12]}-{timestamp}"
+    if effective_ref:
+        return f"{effective_ref.replace('/', '-')}-{timestamp}"
+    return timestamp
+
+
+def _publish_object_store_release(
+    *,
+    bucket: str,
+    release_id: str,
+    platform_config: Path,
+    bundles: dict[str, dict[str, str]],
+    commit: str,
+    effective_ref: str | None,
+) -> None:
+    """Publish a complete release before advancing the active release pointer."""
+    release_prefix = f"{RELEASES_PREFIX}/{release_id}"
+    config_key = f"{release_prefix}/platform-config.yaml"
+    manifest_key = f"{release_prefix}/manifest.json"
+    manifest = {
+        "release_id": release_id,
+        "commit": commit or None,
+        "ref": effective_ref,
+        "platform_config_key": config_key,
+        "bundles": bundles,
+    }
+    upload_bytes(bucket, config_key, platform_config.read_bytes(), content_type="application/x-yaml")
+    upload_bytes(
+        bucket,
+        manifest_key,
+        json.dumps(manifest, sort_keys=True).encode("utf-8"),
+        content_type="application/json",
+    )
+    upload_bytes(
+        bucket,
+        f"{RELEASES_PREFIX}/active.json",
+        json.dumps({"manifest_key": manifest_key}, sort_keys=True).encode("utf-8"),
+        content_type="application/json",
+    )
+
+
 async def sync_workflow_repo(session: AsyncSession) -> WorkflowSyncResult:
     """Run the full sync pipeline and persist the outcome to workflow_repo_state."""
     state = await _load_state(session)
@@ -139,8 +214,14 @@ async def _run_sync_pipeline(effective_ref: str | None) -> WorkflowSyncResult:
         compatibility_warnings: dict[str, str] = {}
         bundle_root = settings.runtime_bundle_root.strip()
         bucket = settings.runtime_bundle_object_store_bucket.strip()
-        if bundle_root:
-            output_dir = Path(bundle_root).expanduser()
+        if bundle_root or bucket:
+            output_dir = (
+                Path(bundle_root).expanduser()
+                if bundle_root
+                else Path(tempfile.mkdtemp(prefix="workflow-release-"))
+            )
+            release_id = _release_id(commit=commit, effective_ref=effective_ref)
+            release_bundles: dict[str, dict[str, str]] = {}
             for package in packages:
                 try:
                     build_result = build_workflow_bundle(
@@ -170,10 +251,38 @@ async def _run_sync_pipeline(effective_ref: str | None) -> WorkflowSyncResult:
                             f"than running platform {running_version!r}"
                         )
                     if bucket:
-                        upload_bundle_archive(build_result.bundle_dir, package.name, bucket=bucket)
+                        key = upload_bundle_archive(
+                            build_result.bundle_dir,
+                            package.name,
+                            bucket=bucket,
+                            key_prefix=f"{RELEASES_PREFIX}/{release_id}/bundles",
+                        )
+                        release_bundles[package.name] = {
+                            "key": key,
+                            "checksum": "sha256:" + hashlib.sha256(build_result.manifest_path.read_bytes()).hexdigest(),
+                        }
                 except Exception as exc:  # noqa: BLE001 - one workflow's failure must not abort the whole sync
                     logger.exception("Failed to build/upload bundle for workflow %s", package.name)
                     bundle_errors[package.name] = str(exc)
+
+            if not bundle_errors:
+                try:
+                    snapshot = _publish_platform_config_snapshot(output_dir)
+                    if bucket:
+                        _publish_object_store_release(
+                            bucket=bucket,
+                            release_id=release_id,
+                            platform_config=snapshot,
+                            bundles=release_bundles,
+                            commit=commit,
+                            effective_ref=effective_ref,
+                        )
+                except Exception as exc:  # noqa: BLE001 - do not activate an incomplete release snapshot
+                    logger.exception("Failed to publish synced platform config")
+                    bundle_errors["platform-config"] = str(exc)
+
+            if not bundle_root:
+                shutil.rmtree(output_dir, ignore_errors=True)
 
         status = "ok" if not bundle_errors else "partial_error"
         return WorkflowSyncResult(

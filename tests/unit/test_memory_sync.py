@@ -19,7 +19,9 @@ from session_manager.memory_sync import (
     _stream_to_bytes,
     _tar_directory,
     backup_memory,
+    backup_memory_from_path,
     restore_memory,
+    restore_memory_to_path,
 )
 
 pytestmark = pytest.mark.unit
@@ -155,3 +157,30 @@ async def test_filesystem_backup_and_restore_uses_object_storage(monkeypatch, tm
             path.rmdir()
     assert await restore_memory("platform-test") is True
     assert (memory_dir / "notes.md").read_text() == "persist me"
+
+
+@pytest.mark.asyncio
+async def test_kubernetes_task_memory_restores_and_persists_via_object_storage(monkeypatch, tmp_path):
+    object_store: dict[str, bytes] = {}
+
+    def fake_upload(bucket, key, data, *, content_type="application/octet-stream"):
+        object_store[f"{bucket}/{key}"] = data
+        return key
+
+    def fake_download(bucket, key):
+        return object_store.get(f"{bucket}/{key}")
+
+    monkeypatch.setattr("session_manager.memory_sync.upload_bytes", fake_upload)
+    monkeypatch.setattr("session_manager.memory_sync.download_bytes", fake_download)
+
+    memory_dir = tmp_path / "memory"
+    assert await restore_memory_to_path("platform-test", memory_dir) is False
+
+    memory_dir.mkdir()
+    (memory_dir / "notes.md").write_text("persist me")
+    assert await backup_memory_from_path("platform-test", memory_dir) is True
+    assert "agent-memory/platform-test/latest.tar.gz" in object_store
+
+    restored_dir = tmp_path / "restored"
+    assert await restore_memory_to_path("platform-test", restored_dir) is True
+    assert (restored_dir / "notes.md").read_text() == "persist me"

@@ -40,6 +40,7 @@ interface TraceNode {
   body?: string;
   duration?: number;
   isError?: boolean;
+  badge?: string;
   children: TraceNode[];
   raw?: unknown;
   meta?: Record<string, string>;
@@ -202,7 +203,6 @@ function buildTree(
   heartbeats: SessionEvent[];
   skillsUsed: string[];
   mcpsUsed: string[];
-  coordinatorAgent?: string;
 } {
   const root: TraceNode = {
     id: 'root',
@@ -224,7 +224,7 @@ function buildTree(
   const skillNames = new Set<string>();
   // MCP servers actually used, derived from tool calls named mcp__<server>__<tool>.
   const mcpServers = new Set<string>();
-  let coordinatorAgent: string | undefined;
+  let defaultAgent: string | undefined;
 
   let activeSubagent: TraceNode | null = null;
   const stats: SessionStats = {
@@ -266,7 +266,7 @@ function buildTree(
 
     if (event.event_type === 'session_start') {
       if (typeof data.agent === 'string' && data.agent.trim()) {
-        coordinatorAgent = data.agent.trim();
+        defaultAgent = data.agent.trim();
       }
       // Prefer the full task prompt over the truncated preview so the initial
       // message is shown in full.
@@ -595,8 +595,9 @@ function buildTree(
             id: `${event.id}-sys-${i}`,
             kind: 'lifecycle',
             timestamp: ts,
-            label: subtype,
-            detail: desc,
+            label: subtype === 'init' && defaultAgent ? defaultAgent : subtype,
+            detail: subtype === 'init' ? 'init' : desc,
+            badge: subtype === 'init' && defaultAgent ? 'AGENT' : undefined,
             children: [],
             raw: msg,
           });
@@ -751,7 +752,6 @@ function buildTree(
     heartbeats,
     skillsUsed: Array.from(skillNames).sort(),
     mcpsUsed: Array.from(mcpServers).sort(),
-    coordinatorAgent,
   };
 }
 
@@ -802,7 +802,7 @@ const KIND_CONFIG: Record<
     accent: 'text-[#A78BCA]',
     bg: 'bg-[#A78BCA]/8',
     border: 'border-[#A78BCA]/20',
-    badge: 'AGENT',
+    badge: 'SUBAGENT',
   },
   subagent_progress: {
     icon: '⋯',
@@ -915,12 +915,12 @@ function TraceNodeView({
           >
             {hasChildren ? (open ? '▾' : '▸') : cfg.icon}
           </span>
-          {cfg.badge && (
+          {(node.badge ?? cfg.badge) && (
             <span
               className={`flex-none mt-px rounded px-1.5 py-0.5 text-[9px] font-bold tracking-[0.15em] uppercase
               ${node.isError ? 'bg-[var(--color-error)]/20 text-[var(--color-error)]' : `bg-ops-surface-raised ${cfg.accent}`}`}
             >
-              {cfg.badge}
+              {node.badge ?? cfg.badge}
             </span>
           )}
           <span
@@ -1236,7 +1236,7 @@ export default function SessionDetailPage() {
   }, [taskId, autoRefresh]);
 
   const promptForTree = taskRecord?.prompt ?? session?.task?.prompt;
-  const { root, stats, heartbeats, skillsUsed, mcpsUsed, coordinatorAgent } =
+  const { root, stats, heartbeats, skillsUsed, mcpsUsed } =
     useMemo(() => buildTree(events, promptForTree), [events, promptForTree]);
   const [forceOpen, setForceOpen] = useState<boolean | null>(null);
 
@@ -1503,16 +1503,6 @@ export default function SessionDetailPage() {
             </div>
             <p className="text-sm text-[var(--color-text-secondary)]">
               {task.workflow}
-              {coordinatorAgent && (
-                <>
-                  <span className="mx-2 text-[var(--color-text-tertiary)]">
-                    ·
-                  </span>
-                  <span className="text-[#A78BCA]">
-                    agent: {coordinatorAgent}
-                  </span>
-                </>
-              )}
             </p>
             <p className="font-mono text-[10px] text-[var(--color-text-tertiary)]">
               {taskId}

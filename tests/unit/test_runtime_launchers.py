@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-import sys
-import types
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import docker.errors
 import pytest
 from session_manager.runtime_launchers import (
-    CloudRunJobsLauncher,
     DockerRuntimeLauncher,
     RuntimeLaunchSpec,
     get_runtime_launcher,
@@ -194,70 +190,3 @@ def test_runtime_launcher_defaults_to_docker(monkeypatch):
 
     assert get_runtime_launcher().provider == "docker"
     reset_runtime_launcher_for_tests()
-
-
-def test_cloud_run_launcher_builds_env_override_request(monkeypatch):
-    from shared.lib.config import settings
-
-    class FakeEnvVar:
-        def __init__(self, *, name, value):
-            self.name = name
-            self.value = value
-
-    class FakeContainerOverride:
-        def __init__(self, *, name, env):
-            self.name = name
-            self.env = env
-
-    class FakeOverrides:
-        ContainerOverride = FakeContainerOverride
-
-        def __init__(self, *, container_overrides):
-            self.container_overrides = container_overrides
-
-    class FakeRunJobRequest:
-        Overrides = FakeOverrides
-
-        def __init__(self, *, name, overrides):
-            self.name = name
-            self.overrides = overrides
-
-    class FakeJobsClient:
-        last_request = None
-
-        def run_job(self, *, request):
-            FakeJobsClient.last_request = request
-            return SimpleNamespace(metadata=SimpleNamespace(name="executions/task-123"))
-
-    fake_run_v2 = types.ModuleType("google.cloud.run_v2")
-    fake_run_v2.EnvVar = FakeEnvVar
-    fake_run_v2.RunJobRequest = FakeRunJobRequest
-    fake_run_v2.JobsClient = FakeJobsClient
-    fake_run_v2.ExecutionsClient = lambda: MagicMock()
-
-    google_module = types.ModuleType("google")
-    cloud_module = types.ModuleType("google.cloud")
-    cloud_module.run_v2 = fake_run_v2
-    monkeypatch.setitem(sys.modules, "google", google_module)
-    monkeypatch.setitem(sys.modules, "google.cloud", cloud_module)
-    monkeypatch.setitem(sys.modules, "google.cloud.run_v2", fake_run_v2)
-    monkeypatch.setattr(settings, "cloud_run_project", "proj")
-    monkeypatch.setattr(settings, "cloud_run_region", "region")
-    monkeypatch.setattr(settings, "cloud_run_job_name", "runtime-job")
-
-    launcher = CloudRunJobsLauncher()
-    handle = launcher.launch(
-        RuntimeLaunchSpec(
-            task_id="task-123",
-            workflow="wf",
-            image="ignored-by-existing-job",
-            environment={"B": "2", "A": "1"},
-        )
-    )
-
-    assert handle.id == "executions/task-123"
-    request = FakeJobsClient.last_request
-    assert request.name == "projects/proj/locations/region/jobs/runtime-job"
-    override = request.overrides.container_overrides[0]
-    assert override.name == "agent-runtime"
-    assert [(env.name, env.value) for env in override.env] == [("A", "1"), ("B", "2")]

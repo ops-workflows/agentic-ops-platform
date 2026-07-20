@@ -44,10 +44,6 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "ruff" },
 ]
-gcp = [
-    { name = "google-cloud-run" },
-    { name = "google-cloud-storage" },
-]
 kubernetes = [
     { name = "kubernetes" },
 ]
@@ -62,9 +58,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "fastmcp", specifier = ">=3.0.0" },
     { name = "google-cloud-pubsub", marker = "extra == 'connectors'", specifier = ">=2.23.0" },
-    { name = "google-cloud-run", marker = "extra == 'gcp'", specifier = ">=0.10.0" },
     { name = "google-cloud-storage", marker = "extra == 'connectors'", specifier = ">=2.18.0" },
-    { name = "google-cloud-storage", marker = "extra == 'gcp'", specifier = ">=2.18.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "jsonschema", specifier = ">=4.23.0" },
     { name = "kubernetes", marker = "extra == 'kubernetes'", specifier = ">=30.0.0" },
@@ -82,7 +76,7 @@ requires-dist = [
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.30" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0" },
 ]
-provides-extras = ["dev", "connectors", "gcp", "kubernetes"]
+provides-extras = ["dev", "connectors", "kubernetes"]
 
 [[package]]
 name = "aiofile"
@@ -1071,23 +1065,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a9/a5/0c7b27493ad6e744d175999e93bc51141ae70b23184d0bdbcb13fc9a4b29/google_cloud_pubsub-2.38.0.tar.gz", hash = "sha256:9212309f8d6cfaefb577bca52492b13464b56e584505408685d63e69346c56cf", size = 402783, upload-time = "2026-05-07T08:04:29.024Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0c/ea/d000ce0663c8989651f80b02e2ea8bb700d29140ade580f275b4ec4c9687/google_cloud_pubsub-2.38.0-py3-none-any.whl", hash = "sha256:fed2c40cfb77d58f6dced563a8146a8c34319c7dfbbb4d045b6c9c101e043db9", size = 324839, upload-time = "2026-05-07T08:03:04.923Z" },
-]
-
-[[package]]
-name = "google-cloud-run"
-version = "0.16.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "google-api-core", extra = ["grpc"] },
-    { name = "google-auth" },
-    { name = "grpc-google-iam-v1" },
-    { name = "grpcio" },
-    { name = "proto-plus" },
-    { name = "protobuf" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b7/89/dcaf0dc97e39b41e446456ceb60657ab025de79cfccd39cbd739d1a9849e/google_cloud_run-0.16.0.tar.gz", hash = "sha256:d52cf4e6ad3702ae48caccf6abcab543afee6f61c2a6ec753cc62a31e5b629f1", size = 514452, upload-time = "2026-03-26T22:17:05.589Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/fa/c7/46153dc13713b5e4276d86f28ff4563332f9e4bae5ebc83abc5bfd994801/google_cloud_run-0.16.0-py3-none-any.whl", hash = "sha256:d7d2dd7307130fde2a0ce27e96d580dd23b7b2d973b6484b94d902e6b2618860", size = 459112, upload-time = "2026-03-26T22:16:00.018Z" },
 ]
 
 [[package]]

@@ -72,12 +72,15 @@ sessions:
   directory; agents discover and update it with standard file tools (`Glob`,
   `Grep`, `Read`, `Write`) rather than a special memory tool. `MEMORY.md` is a
   convention, not a magic file — other note files can live beside it.
-- session-manager backs the memory volume up to object storage after each
-  session (`agent-memory/{agent}/latest.tar.gz` plus a timestamped version)
-  and restores it before the next session if the volume is empty, so
-  `memory: project` survives the container lifecycle.
-- The persistence backend follows `MEMORY_SYNC_MODE` (`docker_volume`,
-  `kubernetes_pvc`, or `object_store`) — see [Configuration](configuration.md).
+- session-manager backs project memory up to object storage after each session
+  (`agent-memory/{agent}/latest.tar.gz` plus a timestamped version) and
+  restores it before the next session. Compose uses a named Docker volume as a
+  cache; Kubernetes Jobs use a task-local `emptyDir` at `/memory`, restored by
+  an init helper and uploaded by a completion helper, so no Kubernetes memory
+  PVC is required.
+- `MEMORY_SYNC_MODE` controls the local service path (`docker_volume` or
+  `filesystem`). Kubernetes runtime Jobs always use the object-store helper
+  flow described above — see [Configuration](configuration.md).
 
 Housekeeping prunes old agent-memory versions and expired learning-memory per
 the retention settings in [Configuration](configuration.md), while leaving

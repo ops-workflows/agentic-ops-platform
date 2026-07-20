@@ -104,7 +104,7 @@ docker run --runtime=runsc --rm hello-world
 After `make bootstrap`, start the platform with:
 
 ```sh
-SANDBOX_MODE=gvisor make up-auto
+SANDBOX_MODE=gvisor make up
 ```
 
 The session manager then requests `runtime="runsc"` for each agent-session
@@ -237,6 +237,6 @@ The public security boundary covers the mechanisms this repo owns:
 
 A workflow repo is responsible for its own prompts, skills, hooks, connector
 instances, private MCP policy, and which tools/domains it permits. The public
-Compose, Helm, and Cloud Run artifacts are templates — production deployments
+Compose and Helm artifacts are templates — production deployments
 must provide instance-owned TLS, IAM, network policy, database and
 object-storage credentials, and secret management.

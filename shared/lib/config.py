@@ -29,7 +29,7 @@ class ObjectStoreSettings(BaseSettings):
     # provider: "s3" (MinIO, AWS S3, or any S3-compatible endpoint) or "gcs"
     # (Google Cloud Storage). The same provider selection is used uniformly
     # for agent-memory backups and workflow bundles across every deployment
-    # target (compose, kubernetes, gcp).
+    # target (compose or kubernetes).
     object_store_provider: str = "s3"
     object_store_endpoint: str = "minio:9000"
     object_store_access_key: str = "agentic_ops"
@@ -95,6 +95,8 @@ class Settings(
     # URL, instead of (or in addition to) a static runtime_bundle_uri_template.
     runtime_bundle_object_store_bucket: str = ""
     runtime_bundle_presigned_url_expires_sec: int = 3600
+    kubernetes_memory_helper_image: str = ""
+    kubernetes_bootstrap_secret: str = ""
     housekeeping_enabled: bool = True
     housekeeping_interval_sec: int = 3600
     background_job_run_history_limit: int = 5
@@ -105,9 +107,6 @@ class Settings(
     hindsight_request_retry_backoff_sec: float = 0.5
     agent_memory_versions_to_keep: int = 10
     agent_memory_retention_days: int = 90
-    cloud_run_project: str = ""
-    cloud_run_region: str = ""
-    cloud_run_job_name: str = ""
     kubernetes_namespace: str = "default"
 
     # ── Secret management ─────────────────────────────────────────

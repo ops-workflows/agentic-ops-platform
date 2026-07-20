@@ -3,7 +3,7 @@
 Selects between an S3-compatible backend (MinIO, AWS S3, or any other
 S3-compatible endpoint) and Google Cloud Storage based on
 ``settings.object_store_provider``, so memory backups and workflow bundles
-use identical code across compose, Kubernetes, and GCP deployments.
+use identical code across supported deployment targets.
 """
 
 from __future__ import annotations

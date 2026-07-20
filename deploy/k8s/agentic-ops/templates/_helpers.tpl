@@ -38,6 +38,8 @@ configMap:
   value: {{ .Values.workflowRepo.workflowRoot | quote }}
 - name: WORKFLOW_REPO_PATHS
   value: {{ .Values.workflowRepo.workflowRepoPaths | quote }}
+- name: WORKFLOW_REPO_LOCAL_PATH
+  value: {{ .Values.workflowRepo.syncPath | quote }}
 {{- if .Values.infrastructure.postgres.enabled }}
 - name: PG_HOST
   value: {{ include "agentic-ops.postgresName" . | quote }}
@@ -95,6 +97,10 @@ imagePullSecrets:
 {{- define "agentic-ops.commonVolumes" -}}
 - name: platform-config
   {{- include "agentic-ops.platformConfigVolume" . | nindent 2 }}
+- name: workflow-repo-cache
+  emptyDir: {}
+- name: release-cache
+  emptyDir: {}
 {{- if .Values.workflowRepo.existingClaim }}
 - name: workflow-repo
   persistentVolumeClaim:
@@ -106,6 +112,10 @@ imagePullSecrets:
 - name: platform-config
   mountPath: /app/config
   readOnly: true
+- name: workflow-repo-cache
+  mountPath: {{ .Values.workflowRepo.syncPath }}
+- name: release-cache
+  mountPath: {{ .Values.runtimeBundles.root }}
 {{- if .Values.workflowRepo.existingClaim }}
 - name: workflow-repo
   mountPath: {{ .Values.workflowRepo.mountPath }}

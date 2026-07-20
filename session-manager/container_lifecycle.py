@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
+import tempfile
 import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
@@ -101,17 +103,64 @@ def _get_session_model_selector(agent_config: dict) -> str | None:
     return selector or None
 
 
-def _get_platform_runtime_env(model_selector: str | None = None) -> dict[str, str | None]:
+def _active_platform_config_file(release: dict | None = None) -> str:
+    """Return the config snapshot activated by Workflow Repo Sync when available."""
+    release = release if release is not None else _load_active_release()
+    if release:
+        config_key = str(release.get("platform_config_key") or "")
+        bucket = settings.runtime_bundle_object_store_bucket.strip()
+        if config_key and bucket:
+            from shared.lib.object_store import download_bytes
+
+            contents = download_bytes(bucket, config_key)
+            if contents is not None:
+                cache_root = Path(settings.runtime_bundle_root or tempfile.gettempdir()).expanduser() / ".release-cache"
+                cache_root.mkdir(parents=True, exist_ok=True)
+                config_path = cache_root / f"platform-config-{release['release_id']}.yaml"
+                config_path.write_bytes(contents)
+                return str(config_path)
+
+    bundle_root = settings.runtime_bundle_root.strip()
+    if bundle_root:
+        snapshot = Path(bundle_root).expanduser() / "platform-config.yaml"
+        if snapshot.is_file():
+            return str(snapshot)
+    return settings.platform_config_file or settings.platform_secrets_file
+
+
+def _load_active_release() -> dict | None:
+    """Load the object-store release pointer once before a task is launched."""
+    bucket = settings.runtime_bundle_object_store_bucket.strip()
+    if not bucket:
+        return None
+    from shared.lib.object_store import download_bytes
+
+    pointer = download_bytes(bucket, "releases/active.json")
+    if pointer is None:
+        return None
+    try:
+        manifest_key = str(json.loads(pointer).get("manifest_key") or "")
+        manifest_bytes = download_bytes(bucket, manifest_key) if manifest_key else None
+        manifest = json.loads(manifest_bytes) if manifest_bytes else None
+    except (TypeError, ValueError, json.JSONDecodeError):
+        logger.warning("Ignoring invalid active workflow release pointer")
+        return None
+    return manifest if isinstance(manifest, dict) and manifest.get("release_id") else None
+
+
+def _get_platform_runtime_env(
+    model_selector: str | None = None, *, platform_file: str | None = None
+) -> dict[str, str | None]:
     """Load platform-wide runtime env overrides for every session container."""
-    platform_file = settings.platform_config_file or settings.platform_secrets_file
+    platform_file = platform_file or _active_platform_config_file()
     if not platform_file:
         return {}
     return load_platform_runtime_env(platform_file, model_selector=model_selector)
 
 
-def _get_platform_config_env() -> dict[str, str]:
+def _get_platform_config_env(*, platform_file: str | None = None) -> dict[str, str]:
     """Load plain platform config values for runtime-container service endpoints."""
-    platform_file = settings.platform_config_file or settings.platform_secrets_file
+    platform_file = platform_file or _active_platform_config_file()
     if not platform_file:
         return {}
     return load_platform_env(platform_file, identity=settings.age_identity)
@@ -150,8 +199,25 @@ def _format_bundle_uri(workflow: str) -> str:
     return template.format(workflow=workflow)
 
 
-def _resolve_workflow_bundle(workflow: str) -> tuple[str | None, str | None, str | None]:
+def _resolve_workflow_bundle(
+    workflow: str, release: dict | None = None
+) -> tuple[str | None, str | None, str | None]:
     """Return local bundle path, bundle URI, and checksum for a workflow if configured."""
+    if release:
+        bundle = (release.get("bundles") or {}).get(workflow)
+        bucket = settings.runtime_bundle_object_store_bucket.strip()
+        if isinstance(bundle, dict) and bucket and bundle.get("key"):
+            from shared.lib.object_store import presigned_get_url
+
+            return (
+                None,
+                presigned_get_url(
+                    bucket,
+                    str(bundle["key"]),
+                    expires_sec=settings.runtime_bundle_presigned_url_expires_sec,
+                ),
+                str(bundle.get("checksum") or "") or None,
+            )
     bundle_uri = _format_bundle_uri(workflow) or None
     bundle_root = settings.runtime_bundle_root.strip()
     if not bundle_root:
@@ -218,7 +284,9 @@ async def spawn_agent_session(task: Task) -> RuntimeHandle | None:
         task_metadata = task.task_metadata if isinstance(task.task_metadata, dict) else {}
         runtime = agent_config.get("runtime", {})
         container_image = runtime.get("container_image", "ai-ops-agent-runtime:latest")
-        platform_config_env = _get_platform_config_env()
+        release = _load_active_release()
+        platform_file = _active_platform_config_file(release)
+        platform_config_env = _get_platform_config_env(platform_file=platform_file)
 
         environment = {
             # ── Task context (non-secret) ──
@@ -269,7 +337,10 @@ async def spawn_agent_session(task: Task) -> RuntimeHandle | None:
         }
 
         model_selector = _get_session_model_selector(agent_config)
-        _apply_runtime_env_overrides(environment, _get_platform_runtime_env(model_selector=model_selector))
+        _apply_runtime_env_overrides(
+            environment,
+            _get_platform_runtime_env(model_selector=model_selector, platform_file=platform_file),
+        )
         environment.update(_get_agent_env_vars(agent_config))
 
         # ── Decrypt agent secrets → env vars ──────────────────────
@@ -295,7 +366,7 @@ async def spawn_agent_session(task: Task) -> RuntimeHandle | None:
 
         shared_dir = os.path.join(host_repo_root, "shared")
         shared_mount = shared_dir if settings.host_repo_root or os.path.isdir(shared_dir) else None
-        bundle_path, bundle_uri, bundle_checksum = _resolve_workflow_bundle(task.workflow)
+        bundle_path, bundle_uri, bundle_checksum = _resolve_workflow_bundle(task.workflow, release=release)
 
         # Per-agent memory mounted separately — the runtime symlinks it
         # into the workspace at .claude/agent-memory during staging.

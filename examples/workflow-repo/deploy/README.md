@@ -22,7 +22,7 @@ your workflow repo as `deploy/compose.env` and set its non-secret values. Then
 from `agentic-ops-platform/`, run:
 
 ```sh
-make up-auto
+make up
 ```
 
 The Makefile loads `deploy/compose.env` first, then the generated root

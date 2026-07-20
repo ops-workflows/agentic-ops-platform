@@ -2,9 +2,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# Git is required to clone/fetch remote workflow repositories during UI Sync.
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+
 # Install dependencies
 COPY pyproject.toml .
-RUN pip install --no-cache-dir ".[dev]"
+RUN pip install --no-cache-dir ".[dev,connectors]"
 
 # Copy shared library and gateway
 COPY shared/ ./shared/

@@ -9,11 +9,11 @@ repo's `platform-config.yaml`.
 
 Prompts:
 
-1. **Deployment target** — `compose`, `kubernetes`, or `gcp`.
+1. **Deployment target** — `compose` or `kubernetes`.
 2. **Workflow source** — `remote` (git URL + ref + optional PAT) or `local`
    (a filesystem checkout path). `compose`
-   only supports `local` today (it bind-mounts a checkout); `kubernetes` and
-   `gcp` expect `remote`.
+   only supports `local` today (it bind-mounts a checkout); `kubernetes`
+   expects `remote`.
 3. **Repo URL/ref/PAT** (remote) or **local checkout path** plus optional
    GitHub URL/PAT (local). The local checkout remains the sync source; the
    GitHub values enable version lookup and reflection PRs for that same repo.
@@ -31,24 +31,54 @@ Generated artifact per target (none of these are committed):
 
 | Target | Artifact | Apply |
 | --- | --- | --- |
-| `compose` | `compose.env` | `make up-auto` |
+| `compose` | `compose.env` | `make up` |
 | `kubernetes` | `dist/bootstrap/k8s-secret.sh` | run the script to create/update a `Secret` |
-| `gcp` | `dist/bootstrap/gcp-secrets.sh` | run the script to create/update Secret Manager entries |
+
+## Kubernetes deployment
+
+Bootstrap creates only the operator-owned `agentic-ops-bootstrap` Secret. It
+does not create the repo-owned `platform-config.yaml` Secret, container images,
+object-store buckets, or Helm release.
+
+Use the following command after creating/pushing the image tags referenced by
+your workflow repo's `deploy/k8s-values.yaml` and provisioning the configured
+object-store bucket for workflow releases and agent memory:
+
+```sh
+make k8s-deploy \
+   K8S_RELEASE=corp-agentic-ops \
+   K8S_NAMESPACE=agentic-ops \
+   K8S_VALUES_FILE=/path/to/workflow-repo/deploy/k8s-values.yaml \
+   K8S_PLATFORM_CONFIG_FILE=/path/to/workflow-repo/platform-config.yaml \
+   K8S_PLATFORM_CONFIG_SECRET=corp-agentic-ops-platform-config
+```
+
+`k8s-deploy` applies the generated bootstrap Secret, upserts the
+`platform-config.yaml` Secret, then runs `helm upgrade --install --wait
+--atomic`. To apply later platform-config, MCP/connector, replica, or image-tag
+changes, use the same arguments with `make k8s-update`. It upserts the
+platform-config Secret and runs the same Helm upgrade without changing bootstrap
+credentials. `K8S_NAMESPACE` must match the namespace embedded by
+`make bootstrap` in `dist/bootstrap/k8s-secret.sh`.
+
+For platform code changes, first build and push new **immutable** image tags,
+update the corresponding `images.*.tag` values, then run `make k8s-update`.
+Reapplying `latest` does not necessarily change a Deployment pod template and
+therefore does not provide a reliable rollout.
 
 ## Which services actually start
 
 Compose gates every optional MCP server and connector behind a profile (see
 `deploy/docker-compose.yml`'s `profiles:` entries); nothing reads
-`platform-config.yaml` to decide this automatically for you. `make up`
-starts the base stack with whatever `COMPOSE_PROFILES` you already have
-exported (or none). `make up-auto` derives the right value for you instead —
-`scripts/compose_profiles.py` reads the instance's `platform-config.yaml`
+`platform-config.yaml` to decide this automatically for you. `make up` derives
+the right profile set with `scripts/compose_profiles.py`, which reads the
+instance's `platform-config.yaml`
 (`$PLATFORM_CONFIG_FILE`/`$HOST_PLATFORM_CONFIG_FILE`, or the bundled example)
 and maps its `mcps.enabled`, `connectors.enabled` (by connector `type`), and
 `model_profiles` (by `ANTHROPIC_BASE_URL`) to the matching profile names:
 
 ```sh
-make up-auto
+make up
 # Computed COMPOSE_PROFILES=gcp-pubsub,model-gateway,salesforce
 ```
 
@@ -58,17 +88,35 @@ root `compose.env` with bootstrap secrets and its path to that workflow file.
 The Makefile loads both automatically (workflow file first, generated secrets
 second), so a workflow repo using shipped services needs no Compose override.
 
-Kubernetes (Helm) and Cloud Run do **not** have an equivalent automatic
-derivation today:
+Workflow Repo **Sync** is the release boundary for workflow packages and
+repo-owned per-task runtime settings. After a successful sync, the selected
+revision's `platform-config.yaml` is snapshotted with the workflow bundles; new
+tasks use that snapshot for model profiles, context limits, and runtime env.
+Running tasks retain their launch environment. This behavior is identical for
+local-directory and remote Git workflow sources.
+
+Sync does not reconcile long-running service topology. Changes to `mcps.enabled`
+or `connectors.enabled` still require an operator deployment action: run
+`make down && make up` for Compose, or update Helm/Kubernetes manifests through the
+deployment control plane. The Workflow Repo UI should surface this requirement
+when those settings change.
+
+Kubernetes (Helm) does **not** have an equivalent automatic derivation today:
 
 - The Helm chart's `mcps.<id>.enabled` / `connectors.<id>.enabled` booleans in
   `values.yaml` directly gate which templates render — but the chart never
   reads `platform-config.yaml` itself, so these booleans have to be kept in
   sync with it by hand.
-- The Cloud Run templates under `deploy/gcp/` are rendered one service at a
-  time via explicit `envsubst` commands (see `deploy/gcp/README.md`); there is
-  no manifest or script that renders "everything this instance's config
-  enables" in one step.
+
+For remote private workflow repositories, the Helm chart uses an ephemeral
+clone cache in Gateway and session-manager plus object storage as the durable
+release transport. A successful UI Sync uploads immutable bundles and the
+matching `platform-config.yaml`, then advances the active release pointer.
+New tasks resolve both from that one release; no workflow-repo PVC is needed.
+Kubernetes runtime Jobs use an `emptyDir` mounted at `/memory`; a helper
+restores agent memory from object storage before the runtime starts and uploads
+it after the runtime signals completion. PostgreSQL, self-hosted MinIO, and
+Hindsight remain the only chart-managed components that need durable PVCs.
 
 ## Local development (uncommitted working tree)
 
@@ -90,6 +138,8 @@ storage is optional in this mode; a local `RUNTIME_BUNDLE_ROOT` works fine.
 | `runtime-build` | Build the `ai-ops-agent-runtime` image. |
 | `build` | `runtime-build` + `compose-build`. |
 | `up` / `down` | Start/stop the local Compose stack. |
+| `k8s-deploy` | Apply the bootstrap/config Secrets and install the Helm release. |
+| `k8s-update` | Upsert the config Secret and upgrade the Helm release. |
 | `restart` | `down` + `build` + `up`. |
 | `restart-<service>` | Rebuild and recreate one service, e.g. `make restart-postgres`. |
 | `ensure-test-db` | Create the dedicated Postgres test database if missing. |
@@ -110,13 +160,11 @@ storage is optional in this mode; a local `RUNTIME_BUNDLE_ROOT` works fine.
   and `RUNTIME_BUNDLE_ROOT`. Optional profiles: `model-gateway`, `local-llm`,
   `salesforce`, `splunk`, `cloudwatch`, `jira`, `servicenow`, `gcp-pubsub`.
 - `deploy/k8s/agentic-ops` — Kubernetes (Helm) chart; instance values select the
-   platform-config secret/configmap, workflow-repo PVC, bundle URI pattern,
-   bootstrap Secret, and which MCPs/connectors run. Postgres, S3-compatible
-   storage, and Hindsight are external by default; a workflow repo can opt into
-   chart-managed pgvector Postgres, MinIO, and Hindsight through
-   `infrastructure.*.enabled` in its values file.
-- `deploy/gcp/` — thin Cloud Run service/job templates; Cloud SQL,
-  Secret Manager, GCS, IAM, and VPC wiring are instance-owned.
+   platform-config secret/configmap, ephemeral workflow clone/release caches,
+   object-store release bucket, bootstrap Secret, and which MCPs/connectors
+   run. Postgres, S3-compatible storage, and Hindsight are external by default;
+   a workflow repo can opt into chart-managed pgvector Postgres, MinIO, and
+   Hindsight through `infrastructure.*.enabled` in its values file.
 
 Private/customer deployments should commit non-secret Compose/Kubernetes values
 in the workflow repo (`deploy/compose.env`, `deploy/k8s-values.yaml`) and use
@@ -131,7 +179,7 @@ and a `manifest.yaml`, merged from the platform core, the workflow repo's
 shared assets, and the workflow itself (see
 [Workflow authoring](workflow-authoring.md) for assembly/precedence detail).
 
-Every launcher (Docker, Kubernetes, Cloud Run) consumes the same contract:
+Every supported launcher (Docker and Kubernetes) consumes the same contract:
 
 | Env var | Meaning |
 | --- | --- |

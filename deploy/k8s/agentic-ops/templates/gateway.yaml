@@ -25,6 +25,10 @@ spec:
               containerPort: {{ .Values.gateway.port }}
           env:
             {{- include "agentic-ops.commonEnv" . | nindent 12 }}
+            - name: RUNTIME_BUNDLE_ROOT
+              value: {{ .Values.runtimeBundles.root | quote }}
+            - name: RUNTIME_BUNDLE_OBJECT_STORE_BUCKET
+              value: {{ .Values.runtimeBundles.objectStoreBucket | quote }}
           {{- if .Values.bootstrap.existingSecret }}
           envFrom:
             {{- include "agentic-ops.bootstrapEnvFrom" . | nindent 12 }}

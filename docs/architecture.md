@@ -24,7 +24,7 @@ eligible task with `SELECT ... FOR UPDATE SKIP LOCKED` (so replicas can share
 one queue safely), resolves or builds the workflow bundle and its checksum,
 assembles the runtime environment (decrypted secrets, platform config, model
 profile), and launches a runtime container through a launcher abstraction that
-supports Docker, Cloud Run Jobs, and Kubernetes. After a session it backs up
+supports Docker and Kubernetes. After a session it backs up
 the agent's memory volume to object storage (and restores it before the next
 run), and a periodic housekeeping pass archives/prunes old tasks and memory
 versions.

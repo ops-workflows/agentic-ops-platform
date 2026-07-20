@@ -1,11 +1,8 @@
 """Minimal background HTTP health endpoint for non-request-driven processes.
 
 Connectors are long-running pollers/subscribers with no HTTP server of their
-own, but Cloud Run (Knative) Services require the container to bind `$PORT`
-and answer health checks. This starts a tiny stdlib-only `/health` listener on
-a daemon thread so a connector can run as an always-on Cloud Run Service
-(`minScale`/`maxScale` set to 1, no request-based autoscaling) the same way
-the platform's other services do.
+own. This starts a tiny stdlib-only `/health` listener on a daemon thread for
+deployment health checks.
 """
 
 from __future__ import annotations

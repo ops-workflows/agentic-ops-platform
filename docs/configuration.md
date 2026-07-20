@@ -56,8 +56,7 @@ repo-owned config.
 ### Object storage
 
 One provider-neutral abstraction (`shared/lib/object_store.py`) backs both
-workflow bundles and agent-memory backups, selected the same way everywhere
-(Compose, Kubernetes, GCP).
+workflow bundles and agent-memory backups across supported deployment targets.
 
 | Env var | Default | Purpose |
 | --- | --- | --- |
@@ -72,19 +71,20 @@ workflow bundles and agent-memory backups, selected the same way everywhere
 
 | Env var | Default | Purpose |
 | --- | --- | --- |
-| `RUNTIME_BUNDLE_ROOT` | `""` | Local filesystem path (or prefix) where built bundles are looked up/written. |
+| `RUNTIME_BUNDLE_ROOT` | `""` | Ephemeral local build/cache path for workflow bundles and synced config snapshots. |
 | `RUNTIME_BUNDLE_URI_TEMPLATE` | `""` | Static bundle URI template, e.g. `gs://bucket/bundles/{workflow}.tar.gz`. |
-| `RUNTIME_BUNDLE_OBJECT_STORE_BUCKET` | `""` | When set, session-manager uploads freshly built bundles here and hands the runtime a short-lived presigned https URL instead of a raw `s3://`/`gs://` URI. |
+| `RUNTIME_BUNDLE_OBJECT_STORE_BUCKET` | `""` | Canonical bucket for immutable workflow release manifests, config snapshots, and bundles; runtimes receive presigned HTTPS bundle URLs. |
 | `RUNTIME_BUNDLE_PRESIGNED_URL_EXPIRES_SEC` | `3600` | Presigned URL validity window. |
 
 ### Runtime launcher and memory sync
 
 | Env var | Default | Purpose |
 | --- | --- | --- |
-| `RUNTIME_LAUNCHER` | `docker` | `docker`, or the Cloud Run/Kubernetes launchers. |
-| `MEMORY_SYNC_MODE` | `docker_volume` | `docker_volume`, `kubernetes_pvc`, or `object_store`. |
+| `RUNTIME_LAUNCHER` | `docker` | `docker` or `kubernetes`. |
+| `MEMORY_SYNC_MODE` | `docker_volume` | `docker_volume` for Compose or `filesystem` for a mounted memory path. Kubernetes Jobs use task-local `/memory` plus object-store restore/upload. |
 | `MEMORY_FILESYSTEM_ROOT` | `/memory` | Container path agent memory volumes mount at. |
-| `CLOUD_RUN_PROJECT` / `CLOUD_RUN_REGION` / `CLOUD_RUN_JOB_NAME` | `""` | Cloud Run Jobs launcher target. |
+| `KUBERNETES_MEMORY_HELPER_IMAGE` | `""` | Image containing `session_manager.memory_sync`; Helm defaults it to the session-manager image. |
+| `KUBERNETES_BOOTSTRAP_SECRET` | `""` | Bootstrap Secret name referenced by Kubernetes memory helper Jobs for object-store credentials. Helm sets it from `bootstrap.existingSecret`. |
 | `KUBERNETES_NAMESPACE` | `default` | Kubernetes launcher namespace. |
 
 ### Gateway / UI

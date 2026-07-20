@@ -65,10 +65,27 @@ This template's `.mcp.json` wires four servers, and `settings.json`'s
   repo. It only works once you've actually built and deployed that (or your
   own) custom server; remove the entry if you don't need one.
 
-`agents/coordinator.md`'s frontmatter `mcpServers:` list gates which of these
-a given agent can actually call — a server present in `.mcp.json` isn't
-automatically usable by every agent. Add `custom-example` there too once your
-custom server is live.
+Agent frontmatter and `.mcp.json` have separate MCP roles:
+
+- `.mcp.json` configures server connections for the workflow session. In this
+   Agent SDK runtime, those connections are passed to the Claude process
+   globally.
+- `mcpServers:` can reference an existing connection or define a server for an
+   agent; do not treat it as a hard denylist for servers already configured in
+   `.mcp.json`.
+- `tools:` lists the exact callable tools, using names such as
+   `mcp__memory__recall_similar`. Current Claude Code documentation describes
+   this as a callable-tool allowlist. Prefer the smallest role-specific list
+   instead of exposing every tool from each connected server. This reduces tool
+   metadata and tool-selection noise sent to the model, and matters especially
+   when MCP tool search is unavailable or disabled. Verify the behavior on the
+   pinned Claude Code version before using it as a security boundary.
+
+The example coordinator demonstrates the exact-tool allowlist. Add
+`mcp__custom-example__example_lookup` to `tools:` only after that custom server
+is deployed and the coordinator genuinely needs it. Include `custom-example` in
+`mcpServers:` when the coordinator needs a direct agent-scoped reference or
+inline server definition.
 
 ## Using the Agent Builder (alternative)
 

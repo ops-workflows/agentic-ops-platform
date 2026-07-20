@@ -10,10 +10,12 @@ Restore: before session → if volume empty → download from MinIO → extract
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import os
 import shutil
+import sys
 import tarfile
 import tempfile
 from datetime import UTC, datetime
@@ -34,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 MEMORY_HELPER_IMAGE = os.environ.get("MEMORY_HELPER_IMAGE", "alpine:3.20")
 MEMORY_HELPER_PATH = "/memory"
+MEMORY_COMPLETE_MARKER = ".agentic-ops-memory-complete"
 _docker_client: docker.DockerClient | None = None
 
 
@@ -317,3 +320,56 @@ async def _restore_filesystem_memory(agent_name: str) -> bool:
     except Exception:
         logger.exception("Failed to restore filesystem memory for '%s'", agent_name)
         return False
+
+
+async def restore_memory_to_path(agent_name: str, path: Path) -> bool:
+    """Restore one agent archive into a Kubernetes Job's task-local volume."""
+    archive_bytes = download_bytes(BUCKET_AGENT_MEMORY, f"{agent_name}/latest.tar.gz")
+    if archive_bytes is None:
+        logger.info("No backup found for '%s' — first session", agent_name)
+        return False
+    _extract_archive_to_directory(archive_bytes, path)
+    logger.info("Restored memory for '%s' into %s", agent_name, path)
+    return True
+
+
+async def backup_memory_from_path(agent_name: str, path: Path) -> bool:
+    """Persist one Kubernetes Job's task-local memory volume."""
+    if not _directory_has_files(path):
+        logger.info("No memory to backup for '%s'", agent_name)
+        return False
+    archive_bytes = _tar_directory(path)
+    upload_bytes(BUCKET_AGENT_MEMORY, f"{agent_name}/latest.tar.gz", archive_bytes, content_type="application/gzip")
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+    upload_bytes(
+        BUCKET_AGENT_MEMORY,
+        f"{agent_name}/{timestamp}.tar.gz",
+        archive_bytes,
+        content_type="application/gzip",
+    )
+    logger.info("Backed up memory for '%s' from %s", agent_name, path)
+    return True
+
+
+async def _memory_helper_main(argv: list[str]) -> int:
+    if len(argv) != 4 or argv[1] not in {"restore", "wait-upload"}:
+        print(
+            "usage: python -m session_manager.memory_sync {restore|wait-upload} AGENT_NAME MEMORY_PATH",
+            file=sys.stderr,
+        )
+        return 2
+    action, agent_name, raw_path = argv[1:]
+    path = Path(raw_path)
+    if action == "restore":
+        await restore_memory_to_path(agent_name, path)
+        return 0
+    marker = path / MEMORY_COMPLETE_MARKER
+    while not marker.exists():
+        await asyncio.sleep(1)
+    marker.unlink(missing_ok=True)
+    await backup_memory_from_path(agent_name, path)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(asyncio.run(_memory_helper_main(sys.argv)))

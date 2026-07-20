@@ -185,7 +185,7 @@ def upload_bundle_archive(bundle_dir: Path, workflow: str, *, bucket: str, key_p
     """Tar a built bundle directory and upload it to object storage.
 
     Returns the object key (e.g. ``bundles/<workflow>.tar.gz``). Used so
-    compose, Kubernetes, and GCP deployments can all consume bundles through
+    supported deployment targets can all consume bundles through
     the same object-storage-backed transport instead of a host bind mount.
     """
     import io

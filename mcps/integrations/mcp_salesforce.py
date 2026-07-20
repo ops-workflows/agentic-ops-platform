@@ -846,13 +846,7 @@ def get_record(
     ],
     headers: dict[str, str] = CurrentHeaders(),
 ) -> dict[str, Any]:
-    """Use this for current live state when you already know the Salesforce record ID.
-
-    Use this for current record state when you already know the record ID. Do not
-    use it for setup metadata such as ValidationRule, FieldDefinition,
-    EntityDefinition, FlowDefinition, or WorkflowRule; use query_tooling_records
-    for those Tooling API objects instead.
-    """
+    """Fetch the current state of one live record by Salesforce ID."""
     valid_id = _validate_id(record_id)
     if not valid_id:
         return {"error": "Invalid Salesforce record ID format (must be 15 or 18 alphanumeric characters)"}
@@ -913,16 +907,7 @@ def query_records(
     limit: Annotated[int, "Maximum number of records to return. Server capped at 200."] = 50,
     headers: dict[str, str] = CurrentHeaders(),
 ) -> dict[str, Any]:
-    """Use this for filtered live-record queries when you need more than one exact record.
-
-    This tool never accepts raw SOQL. The object type must be allowlisted, field
-    names are validated, and the limit is always capped server-side. Prefer this
-    for live records and standard queryable objects. For Tooling API metadata
-    such as ValidationRule, EntityDefinition, FieldDefinition, Flow, or
-    WorkflowRule, use query_tooling_records instead. Use this path for
-    ApexClass and ApexTrigger object queries, with exact filters and a small
-    field set.
-    """
+    """Query allowlisted live or standard objects with structured filters; raw SOQL is not accepted."""
     if object_type not in ALLOWED_OBJECTS:
         return _allowed_object_error(object_type, tool_name="query_records")
     if not fields:
@@ -1038,12 +1023,7 @@ def query_tooling_records(
     limit: Annotated[int, "Maximum number of records to return. Server capped at 200."] = 25,
     headers: dict[str, str] = CurrentHeaders(),
 ) -> dict[str, Any]:
-    """Use this for setup metadata, schema inspection, and automation internals rather than live business records.
-
-    Use this for setup and schema metadata that is not reliably available through
-    the standard query path, such as validation rules, field definitions, object
-    definitions, flow metadata, workflow rules, and related Tooling metadata.
-    """
+    """Query allowlisted Tooling API metadata for schema and automation inspection."""
     if object_type not in ALLOWED_TOOLING_OBJECTS:
         return _allowed_object_error(
             object_type,

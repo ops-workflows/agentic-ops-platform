@@ -7,19 +7,24 @@ Docker client.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import docker.errors
 import pytest
 from session_manager.container_lifecycle import (
+    _active_platform_config_file,
     _apply_runtime_env_overrides,
     _cleanup_stale_container_name,
     _get_agent_env_vars,
     _get_session_model_selector,
+    _load_active_release,
     _resolve_plugin_mount,
     _resolve_workflow_bundle,
 )
 
+import shared.lib.object_store as object_store_mod
 from shared.lib.config import settings
 
 pytestmark = pytest.mark.unit
@@ -70,6 +75,66 @@ def test_session_model_selector_returns_none_for_missing():
     assert _get_session_model_selector({"session": {}}) is None
     assert _get_session_model_selector({"session": {"model": "   "}}) is None
     assert _get_session_model_selector({"session": "not-a-dict"}) is None
+
+
+def test_active_platform_config_prefers_synced_snapshot(monkeypatch, tmp_path):
+    mounted_config = tmp_path / "mounted-platform-config.yaml"
+    mounted_config.write_text("default_model_profile: mounted\n", encoding="utf-8")
+    bundle_root = tmp_path / "bundles"
+    bundle_root.mkdir()
+    snapshot = bundle_root / "platform-config.yaml"
+    snapshot.write_text("default_model_profile: synced\n", encoding="utf-8")
+    monkeypatch.setattr(settings, "platform_config_file", str(mounted_config))
+    monkeypatch.setattr(settings, "platform_secrets_file", "")
+    monkeypatch.setattr(settings, "runtime_bundle_root", str(bundle_root))
+
+    assert _active_platform_config_file() == str(snapshot)
+
+
+def test_active_platform_config_falls_back_before_first_sync(monkeypatch, tmp_path):
+    mounted_config = tmp_path / "mounted-platform-config.yaml"
+    mounted_config.write_text("default_model_profile: mounted\n", encoding="utf-8")
+    monkeypatch.setattr(settings, "platform_config_file", str(mounted_config))
+    monkeypatch.setattr(settings, "platform_secrets_file", "")
+    monkeypatch.setattr(settings, "runtime_bundle_root", str(tmp_path / "bundles"))
+
+    assert _active_platform_config_file() == str(mounted_config)
+
+
+def test_active_release_selects_matching_config_and_bundle(monkeypatch, tmp_path):
+    manifest = {
+        "release_id": "release-1",
+        "platform_config_key": "releases/release-1/platform-config.yaml",
+        "bundles": {
+            "platform-test": {
+                "key": "releases/release-1/bundles/platform-test.tar.gz",
+                "checksum": "sha256:bundle-manifest",
+            }
+        },
+    }
+    objects = {
+        "releases/active.json": json.dumps({"manifest_key": "releases/release-1/manifest.json"}).encode(),
+        "releases/release-1/manifest.json": json.dumps(manifest).encode(),
+        "releases/release-1/platform-config.yaml": b"default_model_profile: synced\n",
+    }
+    monkeypatch.setattr(settings, "runtime_bundle_object_store_bucket", "agentic-ops-bundles")
+    monkeypatch.setattr(settings, "runtime_bundle_root", str(tmp_path))
+    monkeypatch.setattr(object_store_mod, "download_bytes", lambda bucket, key: objects.get(key))
+    monkeypatch.setattr(
+        object_store_mod,
+        "presigned_get_url",
+        lambda bucket, key, *, expires_sec=3600: f"https://objects.test/{bucket}/{key}?exp={expires_sec}",
+    )
+
+    release = _load_active_release()
+    assert release == manifest
+    config_path = _active_platform_config_file(release)
+    bundle_path, bundle_uri, checksum = _resolve_workflow_bundle("platform-test", release=release)
+
+    assert Path(config_path).read_text(encoding="utf-8") == "default_model_profile: synced\n"
+    assert bundle_path is None
+    assert bundle_uri == "https://objects.test/agentic-ops-bundles/releases/release-1/bundles/platform-test.tar.gz?exp=3600"
+    assert checksum == "sha256:bundle-manifest"
 
 
 # ── stale container cleanup ──────────────────────────────────────────

@@ -1,8 +1,7 @@
 """Unit tests for large-output / file-handling helpers.
 
-Tests the runtime entrypoint's tool_result extraction + terminal payload
-construction which truncate large outputs and preserve full content in
-``large_parts`` for MinIO upload.
+Tests the runtime entrypoint's tool_result extraction and persisted event
+payload bounds.
 """
 
 from __future__ import annotations
@@ -19,14 +18,27 @@ pytestmark = pytest.mark.unit
 
 from runtime.session_entrypoint import (  # noqa: E402
     MAX_INLINE_SIZE,
+    TRUNCATION_MARKER,
     _build_terminal_event_payload,
     _extract_tool_result_message,
     _is_subagent_no_output_result,
+    _truncate_event_text,
 )
 
 
 def test_max_inline_size_threshold_is_10kb():
     assert MAX_INLINE_SIZE == 10 * 1024
+
+
+def test_truncate_event_text_bounds_utf8_payloads():
+    truncated = _truncate_event_text("å" * MAX_INLINE_SIZE)
+
+    assert len(truncated.encode("utf-8")) <= MAX_INLINE_SIZE
+    assert truncated.endswith(TRUNCATION_MARKER)
+
+
+def test_truncate_event_text_preserves_small_payloads():
+    assert _truncate_event_text("complete result") == "complete result"
 
 
 class _FakeBlock:
@@ -92,9 +104,11 @@ def test_build_terminal_event_payload_keeps_previews_and_large_parts():
     # Previews truncated to 2000
     assert len(payload["last_assistant_message_preview"]) == 2000
     assert len(payload["last_result_text_preview"]) == 2000
-    # Full content retained separately for large-file upload
-    assert payload["last_assistant_message"] == large_msg
-    assert payload["last_result_text"] == large_result
+    # Persisted content is bounded and explicitly marked.
+    assert len(payload["last_assistant_message"].encode("utf-8")) <= MAX_INLINE_SIZE
+    assert len(payload["last_result_text"].encode("utf-8")) <= MAX_INLINE_SIZE
+    assert payload["last_assistant_message"].endswith(TRUNCATION_MARKER)
+    assert payload["last_result_text"].endswith(TRUNCATION_MARKER)
     # Counters preserved
     assert payload["input_tokens"] == 10
     assert payload["turns"] == 3

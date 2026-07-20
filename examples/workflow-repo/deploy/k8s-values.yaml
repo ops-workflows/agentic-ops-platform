@@ -35,13 +35,15 @@ infrastructure:
     embeddingsModel: example-embedding-model
 
 workflowRepo:
+  syncPath: /var/lib/agentic-ops/workflow-repo
   mountPath: /app/workflow-repos/my-workflow-repo
   workflowRoot: ""
-  workflowRepoPaths: /app/workflow-repos/my-workflow-repo
-  existingClaim: my-workflow-repo
+  workflowRepoPaths: ""
+  existingClaim: ""
 
 runtimeBundles:
-  uriTemplate: s3://agentic-ops-bundles/my-workflow-repo/{workflow}
+  root: /var/lib/agentic-ops/releases
+  objectStoreBucket: agentic-ops-bundles
 
 images:
   gateway:

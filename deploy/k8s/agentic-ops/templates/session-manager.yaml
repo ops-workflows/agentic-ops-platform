@@ -28,6 +28,12 @@ spec:
               value: {{ .Values.runtimeBundles.uriTemplate | quote }}
             - name: RUNTIME_BUNDLE_ROOT
               value: {{ .Values.runtimeBundles.root | quote }}
+            - name: RUNTIME_BUNDLE_OBJECT_STORE_BUCKET
+              value: {{ .Values.runtimeBundles.objectStoreBucket | quote }}
+            - name: KUBERNETES_MEMORY_HELPER_IMAGE
+              value: {{ default (printf "%s:%s" .Values.images.sessionManager.repository .Values.images.sessionManager.tag) .Values.sessionManager.env.KUBERNETES_MEMORY_HELPER_IMAGE | quote }}
+            - name: KUBERNETES_BOOTSTRAP_SECRET
+              value: {{ .Values.bootstrap.existingSecret | quote }}
           {{- if .Values.bootstrap.existingSecret }}
           envFrom:
             {{- include "agentic-ops.bootstrapEnvFrom" . | nindent 12 }}

@@ -74,6 +74,7 @@ WORKFLOW_BUNDLE_PATH = Path(os.environ.get("WORKFLOW_BUNDLE_PATH", "/workflow-bu
 WORKFLOW_BUNDLE_URI = os.environ.get("WORKFLOW_BUNDLE_URI", "").strip()
 WORKFLOW_BUNDLE_CHECKSUM = os.environ.get("WORKFLOW_BUNDLE_CHECKSUM", "").strip()
 MEMORY_DIR = Path(os.environ.get("MEMORY_DIR", "/memory"))
+MEMORY_COMPLETE_MARKER = MEMORY_DIR / ".agentic-ops-memory-complete"
 
 # Workspace — writable staging area where Claude actually runs.
 # Populated at startup from the read-only plugin source + shared content.
@@ -452,6 +453,17 @@ async def heartbeat_loop():
 # ─── Event Reporting ─────────────────────────────────────────────────────────
 
 MAX_INLINE_SIZE = 10 * 1024  # 10KB
+TRUNCATION_MARKER = "\n...[truncated by runtime harness]"
+
+
+def _truncate_event_text(value: str, limit: int = MAX_INLINE_SIZE) -> str:
+    """Bound UTF-8 text stored in task and session event payloads."""
+    encoded = value.encode("utf-8")
+    if len(encoded) <= limit:
+        return value
+    marker = TRUNCATION_MARKER.encode("utf-8")
+    clipped = encoded[: max(0, limit - len(marker))].decode("utf-8", errors="ignore")
+    return clipped + TRUNCATION_MARKER
 
 
 async def report_event(event_type: str, data: dict[str, Any]) -> None:
@@ -474,7 +486,7 @@ async def report_event(event_type: str, data: dict[str, Any]) -> None:
 def _build_terminal_event_payload(progress_state: dict[str, Any], *, error: str) -> dict[str, Any]:
     """Build a best-effort terminal snapshot for timeout/error events."""
     payload: dict[str, Any] = {
-        "error": error,
+        "error": _truncate_event_text(error),
         "input_tokens": int(progress_state.get("input_tokens") or 0),
         "output_tokens": int(progress_state.get("output_tokens") or 0),
         "turns": int(progress_state.get("turns") or 0),
@@ -487,12 +499,12 @@ def _build_terminal_event_payload(progress_state: dict[str, Any], *, error: str)
     last_assistant_message = str(progress_state.get("last_assistant_message") or "").strip()
     if last_assistant_message:
         payload["last_assistant_message_preview"] = last_assistant_message[:2000]
-        large_parts["last_assistant_message"] = last_assistant_message
+        large_parts["last_assistant_message"] = _truncate_event_text(last_assistant_message)
 
     last_result_text = str(progress_state.get("last_result_text") or "").strip()
     if last_result_text:
         payload["last_result_text_preview"] = last_result_text[:2000]
-        large_parts["last_result_text"] = last_result_text
+        large_parts["last_result_text"] = _truncate_event_text(last_result_text)
 
     if large_parts:
         payload.update(large_parts)
@@ -1932,7 +1944,7 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
     )
 
     return {
-        "result": final_text,
+        "result": _truncate_event_text(final_text),
         "result_preview": final_text[:5000],
         "input_tokens": total_input_tokens,
         "output_tokens": total_output_tokens,
@@ -1953,9 +1965,14 @@ async def main():
 
     if not PLUGIN_SOURCE_DIR.exists():
         logger.error("Plugin source dir %s not found", PLUGIN_SOURCE_DIR)
+        _signal_kubernetes_memory_sync_complete()
         sys.exit(1)
 
-    _prepare_workspace()
+    try:
+        _prepare_workspace()
+    except Exception:
+        _signal_kubernetes_memory_sync_complete()
+        raise
 
     secret_env = _load_secret_env()
     logger.info("Loaded %d secret env vars for harness + MCP auth", len(secret_env))
@@ -1995,13 +2012,20 @@ async def main():
         heartbeat_task.cancel()
         if _http_client:
             await _http_client.aclose()
+        _signal_kubernetes_memory_sync_complete()
 
     logger.info("Session complete for task %s", TASK_ID)
 
 
 def handle_signal(sig, frame):
     logger.info("Received signal %s, shutting down...", sig)
+    _signal_kubernetes_memory_sync_complete()
     sys.exit(0)
+
+
+def _signal_kubernetes_memory_sync_complete() -> None:
+    if os.environ.get("KUBERNETES_MEMORY_SYNC") == "1":
+        MEMORY_COMPLETE_MARKER.touch()
 
 
 if __name__ == "__main__":

@@ -136,9 +136,11 @@ services:
       PLATFORM_CONFIG_FILE: /app/platform-config.yaml
       WORKFLOW_ROOT: /app/workflows
       WORKFLOW_REPO_PATHS: ${WORKFLOW_REPO_PATHS:-/app/workflows}
+      RUNTIME_BUNDLE_ROOT: ${RUNTIME_BUNDLE_ROOT:-/tmp/agentic-ops-runtime-bundles}
     volumes:
       - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
       - ${HOST_WORKFLOW_REPO_PATH:-../examples/workflow-repo/workflows}:/app/workflows:ro
+      - ${RUNTIME_BUNDLE_ROOT:-/tmp/agentic-ops-runtime-bundles}:${RUNTIME_BUNDLE_ROOT:-/tmp/agentic-ops-runtime-bundles}
       - ../connectors:/app/connectors:ro
       - ../shared:/app/shared:ro
       - /var/run/docker.sock:/var/run/docker.sock

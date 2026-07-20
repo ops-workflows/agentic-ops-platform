@@ -53,14 +53,16 @@ infrastructure:
     storageSize: 10Gi
 
 workflowRepo:
+  syncPath: /var/lib/agentic-ops/workflow-repo
   mountPath: /app/workflow-repos/default
   workflowRoot: ""
-  workflowRepoPaths: /app/workflow-repos/default
+  workflowRepoPaths: ""
   existingClaim: ""
 
 runtimeBundles:
-  root: ""
+  root: /var/lib/agentic-ops/releases
   uriTemplate: ""
+  objectStoreBucket: ""
 
 images:
   gateway:
@@ -87,6 +89,7 @@ sessionManager:
   replicas: 1
   env:
     RUNTIME_LAUNCHER: kubernetes
+    KUBERNETES_MEMORY_HELPER_IMAGE: ""
 
 controlPlaneUi:
   replicas: 1

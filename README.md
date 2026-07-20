@@ -30,9 +30,8 @@ live in your own workflow repository; this repo is the platform they run on.
 - **Web control plane** — tasks, session replay, schedules, approvals,
   analytics, and platform catalogs (MCPs, connectors, memory, workflow-repo
   sync/versioning).
-- **Docker Compose, Helm, and Cloud Run** deployment packages, with a
-  provider-neutral object-storage layer (`s3` or `gcs`) used uniformly across
-  all three.
+- **Docker Compose and Helm** deployment packages, with a provider-neutral
+  object-storage layer (`s3` or `gcs`).
 
 ## Architecture
 
@@ -59,7 +58,7 @@ docker compose -f deploy/docker-compose.yml up --build
 ```
 
 For a guided setup that also handles secrets, remote workflow repos, and
-Kubernetes/Cloud Run targets, use `make bootstrap` — see
+Kubernetes targets, use `make bootstrap` — see
 [docs/deployment.md](docs/deployment.md).
 
 ## Documentation
@@ -71,7 +70,7 @@ Kubernetes/Cloud Run targets, use `make bootstrap` — see
 | [docs/connectors.md](docs/connectors.md) | Connector model, available connectors, and how to add one. |
 | [docs/mcps.md](docs/mcps.md) | Core vs. integration MCP servers and their config. |
 | [docs/memory.md](docs/memory.md) | Long-term memory (Hindsight), per-agent project memory, hooks, and weekly reflection. |
-| [docs/deployment.md](docs/deployment.md) | `make bootstrap`, Compose/Helm/Cloud Run, bundle sync and versioning. |
+| [docs/deployment.md](docs/deployment.md) | `make bootstrap`, Compose/Helm, bundle sync and versioning. |
 | [docs/security.md](docs/security.md) | Permissions, sandbox/credential controls, bundle integrity, approvals, encrypted secrets. |
 | [docs/workflow-authoring.md](docs/workflow-authoring.md) | How to build a workflow package (agent.yaml, skills, hooks) and its bundle. |
 

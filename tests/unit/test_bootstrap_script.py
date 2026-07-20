@@ -12,7 +12,6 @@ from scripts.bootstrap import (
     main,
     normalize_age_identity,
     render_compose_env,
-    render_gcp_secrets_script,
     render_k8s_secret_script,
     write_artifact,
 )
@@ -167,12 +166,6 @@ def test_render_k8s_secret_script_contains_kubectl_apply():
     assert "kubectl apply -f -" in content
 
 
-def test_render_gcp_secrets_script_contains_gcloud_commands():
-    content = render_gcp_secrets_script({"AGE_IDENTITY": "abc"}, project="my-proj")
-    assert "gcloud secrets create AGE_IDENTITY --project=my-proj" in content
-    assert "gcloud secrets versions add AGE_IDENTITY --project=my-proj" in content
-
-
 def test_render_scripts_quote_values_with_special_characters():
     content = render_k8s_secret_script({"LLM_API_KEY": "it's a 'secret'"})
     assert "it'\\''s a '\\''secret'\\''" in content
@@ -202,13 +195,6 @@ def test_write_artifact_kubernetes_target_uses_configured_namespace(tmp_path: Pa
     assert "--from-literal=KUBERNETES_NAMESPACE='test-namespace'" in content
 
 
-def test_write_artifact_gcp_target_writes_executable_script(tmp_path: Path):
-    path = write_artifact(_remote_config(target="gcp"), output_dir=tmp_path)
-    assert path == tmp_path / "dist" / "bootstrap" / "gcp-secrets.sh"
-    assert path.exists()
-    assert path.stat().st_mode & 0o111
-
-
 # ── main() (prompt-only) ─────────────────────────────────────────────
 
 
@@ -221,7 +207,7 @@ def test_main_writes_compose_artifact(monkeypatch, tmp_path: Path, capsys):
     assert exit_code == 0
     output = capsys.readouterr().out
     assert str(artifact) in output
-    assert "make up-auto" in output
+    assert "make up" in output
 
 
 def test_main_reports_invalid_prompted_configuration(monkeypatch, capsys):

@@ -1,8 +1,8 @@
 """Runtime launchers for ephemeral agent sessions.
 
-Docker remains the default local/on-prem launcher. Cloud Run Jobs and
-Kubernetes are optional implementations selected by configuration so the rest
-of the platform can stop depending directly on a Docker daemon.
+Docker remains the default local/on-prem launcher. Kubernetes is an optional
+implementation selected by configuration so the rest of the platform can stop
+depending directly on a Docker daemon.
 """
 
 from __future__ import annotations
@@ -249,114 +249,6 @@ class DockerRuntimeLauncher:
         return removed
 
 
-@dataclass
-class _CloudRunExecutionRecord:
-    execution_name: str
-    task_id: str
-    workflow: str
-
-
-class CloudRunJobsLauncher:
-    provider = "cloud_run_jobs"
-
-    def __init__(self) -> None:
-        if not settings.cloud_run_project or not settings.cloud_run_region or not settings.cloud_run_job_name:
-            raise RuntimeError(
-                "Cloud Run launcher requires CLOUD_RUN_PROJECT, CLOUD_RUN_REGION, and CLOUD_RUN_JOB_NAME"
-            )
-        from google.cloud import run_v2  # type: ignore[import-not-found]
-
-        self.run_v2 = run_v2
-        self.jobs_client = run_v2.JobsClient()
-        self.executions_client = run_v2.ExecutionsClient()
-        self.job_name = (
-            f"projects/{settings.cloud_run_project}/locations/{settings.cloud_run_region}"
-            f"/jobs/{settings.cloud_run_job_name}"
-        )
-        self._executions: dict[str, _CloudRunExecutionRecord] = {}
-
-    def _execution_name_from_operation(self, operation: Any, spec: RuntimeLaunchSpec) -> str:
-        metadata = getattr(operation, "metadata", None)
-        for attr in ("name", "execution", "execution_name"):
-            value = getattr(metadata, attr, None) if metadata is not None else None
-            if value:
-                return str(value)
-        raw_operation = getattr(operation, "operation", None)
-        value = getattr(raw_operation, "name", None)
-        if value:
-            return str(value)
-        return f"{self.job_name}/executions/task-{spec.task_id}"
-
-    def launch(self, spec: RuntimeLaunchSpec) -> RuntimeHandle:
-        environment = _environment_with_bundle_contract(spec)
-        env_overrides = [self.run_v2.EnvVar(name=name, value=value) for name, value in sorted(environment.items())]
-        container_override = self.run_v2.RunJobRequest.Overrides.ContainerOverride(
-            name="agent-runtime",
-            env=env_overrides,
-        )
-        request = self.run_v2.RunJobRequest(
-            name=self.job_name,
-            overrides=self.run_v2.RunJobRequest.Overrides(container_overrides=[container_override]),
-        )
-        operation = self.jobs_client.run_job(request=request)
-        execution_name = self._execution_name_from_operation(operation, spec)
-        self._executions[execution_name] = _CloudRunExecutionRecord(execution_name, spec.task_id, spec.workflow)
-        return RuntimeHandle(
-            id=execution_name,
-            short_id=execution_name.rsplit("/", 1)[-1][:12],
-            provider=self.provider,
-            task_id=spec.task_id,
-            workflow=spec.workflow,
-        )
-
-    def _status_for_execution(self, execution_name: str) -> tuple[str, int | None]:
-        execution = self.executions_client.get_execution(name=execution_name)
-        terminal = getattr(execution, "terminal_condition", None)
-        state = str(getattr(terminal, "state", "") or "").lower()
-        reason = str(getattr(terminal, "reason", "") or "").lower()
-        if "succeeded" in reason or "true" in state:
-            return "exited", 0
-        if "failed" in reason or "false" in state:
-            return "exited", 1
-        return "running", None
-
-    def list_sessions(self) -> list[RuntimeSessionStatus]:
-        statuses: list[RuntimeSessionStatus] = []
-        for execution_name, record in list(self._executions.items()):
-            try:
-                status, exit_code = self._status_for_execution(execution_name)
-            except Exception:
-                logger.exception("Failed to read Cloud Run execution status for %s", execution_name)
-                continue
-            statuses.append(
-                RuntimeSessionStatus(
-                    id=execution_name,
-                    short_id=execution_name.rsplit("/", 1)[-1][:12],
-                    provider=self.provider,
-                    task_id=record.task_id,
-                    workflow=record.workflow,
-                    status=status,
-                    exit_code=exit_code,
-                    logs="Cloud Run logs are available in Cloud Logging.",
-                )
-            )
-        return statuses
-
-    def cleanup_session(self, status: RuntimeSessionStatus) -> None:
-        self._executions.pop(status.id, None)
-
-    def cancel(self, runtime_id: str | None = None, *, task_id: str | None = None) -> bool:
-        targets = []
-        if runtime_id:
-            targets = [runtime_id]
-        elif task_id:
-            targets = [name for name, record in self._executions.items() if record.task_id == task_id]
-        for execution_name in targets:
-            self.executions_client.cancel_execution(name=execution_name)
-            self._executions.pop(execution_name, None)
-        return bool(targets)
-
-
 class KubernetesRuntimeLauncher:
     provider = "kubernetes"
 
@@ -374,7 +266,65 @@ class KubernetesRuntimeLauncher:
         environment = _environment_with_bundle_contract(spec)
         env = [self.client.V1EnvVar(name=name, value=value) for name, value in sorted(environment.items())]
         container = self.client.V1Container(name="agent-runtime", image=spec.image, env=env)
-        pod_spec = self.client.V1PodSpec(restart_policy="Never", containers=[container])
+        init_containers = []
+        volumes = []
+        if spec.memory_volume_name:
+            memory_mount = self.client.V1VolumeMount(name="agent-memory", mount_path="/memory")
+            container.volume_mounts = [memory_mount]
+            helper_image = settings.kubernetes_memory_helper_image.strip()
+            if not helper_image:
+                raise RuntimeError("Kubernetes launcher requires KUBERNETES_MEMORY_HELPER_IMAGE for agent memory sync")
+            storage_env = [
+                self.client.V1EnvVar(name="OBJECT_STORE_PROVIDER", value=settings.object_store_provider),
+                self.client.V1EnvVar(name="OBJECT_STORE_ENDPOINT", value=settings.object_store_endpoint),
+                self.client.V1EnvVar(name="OBJECT_STORE_ACCESS_KEY", value=settings.object_store_access_key),
+                self.client.V1EnvVar(name="OBJECT_STORE_SECURE", value=str(settings.object_store_secure).lower()),
+                self.client.V1EnvVar(name="OBJECT_STORE_GCP_PROJECT", value=settings.object_store_gcp_project),
+            ]
+            if settings.kubernetes_bootstrap_secret:
+                storage_env.append(
+                    self.client.V1EnvVar(
+                        name="OBJECT_STORE_SECRET_KEY",
+                        value_from=self.client.V1EnvVarSource(
+                            secret_key_ref=self.client.V1SecretKeySelector(
+                                name=settings.kubernetes_bootstrap_secret,
+                                key="OBJECT_STORE_SECRET_KEY",
+                                optional=True,
+                            )
+                        ),
+                    )
+                )
+            elif settings.object_store_secret_key:
+                storage_env.append(
+                    self.client.V1EnvVar(name="OBJECT_STORE_SECRET_KEY", value=settings.object_store_secret_key)
+                )
+            init_containers = [
+                self.client.V1Container(
+                    name="memory-restore",
+                    image=helper_image,
+                    command=["python", "-m", "session_manager.memory_sync", "restore", spec.workflow, "/memory"],
+                    env=storage_env,
+                    volume_mounts=[memory_mount],
+                )
+            ]
+            sync_container = self.client.V1Container(
+                name="memory-upload",
+                image=helper_image,
+                command=["python", "-m", "session_manager.memory_sync", "wait-upload", spec.workflow, "/memory"],
+                env=storage_env,
+                volume_mounts=[memory_mount],
+            )
+            container.env.append(self.client.V1EnvVar(name="KUBERNETES_MEMORY_SYNC", value="1"))
+            volumes = [self.client.V1Volume(name="agent-memory", empty_dir=self.client.V1EmptyDirVolumeSource())]
+            containers = [container, sync_container]
+        else:
+            containers = [container]
+        pod_spec = self.client.V1PodSpec(
+            restart_policy="Never",
+            containers=containers,
+            init_containers=init_containers,
+            volumes=volumes,
+        )
         template = self.client.V1PodTemplateSpec(
             metadata=self.client.V1ObjectMeta(
                 labels={"agentic_ops.task_id": spec.task_id, "agentic_ops.workflow": spec.workflow}
@@ -455,8 +405,6 @@ def get_runtime_launcher() -> RuntimeLauncher:
     launcher = settings.runtime_launcher.strip().lower()
     if launcher in {"", "docker"}:
         _launcher = DockerRuntimeLauncher()
-    elif launcher in {"cloud_run", "cloud_run_jobs", "gcp"}:
-        _launcher = CloudRunJobsLauncher()
     elif launcher in {"kubernetes", "k8s"}:
         _launcher = KubernetesRuntimeLauncher()
     else:

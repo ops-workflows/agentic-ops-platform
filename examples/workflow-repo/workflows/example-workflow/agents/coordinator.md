@@ -12,6 +12,9 @@ tools:
   - Bash
   - Grep
   - Agent
+  - mcp__message__handoff_task
+  - mcp__memory__recall_similar
+  - mcp__platform__create_workflow_task
 mcpServers:
   - message
   - memory
