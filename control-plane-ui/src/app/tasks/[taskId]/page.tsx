@@ -4,18 +4,24 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Bot,
   Brain,
+  Cable,
+  CalendarClock,
   CircleDot,
   CircleUserRound,
   ChevronDown,
   ChevronRight,
   Clock3,
+  Cloud,
   GitFork,
+  MessageCircle,
   MessageSquare,
   PlugZap,
   Puzzle,
   Send,
+  ServerCog,
   Sparkles,
   Terminal,
+  Webhook,
   Wrench,
   XCircle,
   type LucideIcon,
@@ -107,34 +113,43 @@ function fmtDur(s: number | null | undefined): string {
   return `${(s / 60).toFixed(1)}m`;
 }
 
-const CHANNEL_DISPLAY: Record<string, { label: string; icon: string }> = {
-  salesforce: { label: 'Salesforce', icon: '☁' },
-  servicenow: { label: 'ServiceNow', icon: '⚡' },
-  message: { label: 'Message', icon: '💬' },
-  schedule: { label: 'Schedule', icon: '⏱' },
-  api: { label: 'API', icon: '⌘' },
+type Origin = { label: string; icon: LucideIcon };
+
+const CHANNEL_DISPLAY: Record<string, Origin> = {
+  salesforce: { label: 'Salesforce', icon: Cloud },
+  servicenow: { label: 'ServiceNow', icon: ServerCog },
+  mattermost: { label: 'Mattermost', icon: MessageCircle },
+  message: { label: 'Message', icon: MessageCircle },
+  schedule: { label: 'Schedule', icon: CalendarClock },
+  'gcp-pubsub': { label: 'GCP Pub/Sub', icon: Cable },
+  api: { label: 'API', icon: Webhook },
 };
 
-function deriveOrigin(task: Task): { label: string; icon: string } {
+function deriveOrigin(task: Task): Origin {
   if (task.channel && CHANNEL_DISPLAY[task.channel]) {
     return CHANNEL_DISPLAY[task.channel];
   }
   if (task.channel) {
-    return { label: task.channel, icon: '🔌' };
+    return { label: task.channel, icon: Cable };
   }
   const meta = task.metadata as Record<string, unknown>;
   if (meta?.triggered_by === 'scheduler')
-    return { label: 'Schedule', icon: '⏱' };
+    return { label: 'Schedule', icon: CalendarClock };
   const source = meta?.source;
   if (typeof source === 'string') {
-    if (source.includes('servicenow'))
-      return { label: 'ServiceNow', icon: '⚡' };
+    const normalizedSource = source.toLowerCase();
+    if (normalizedSource.includes('servicenow'))
+      return { label: 'ServiceNow', icon: ServerCog };
     if (source.includes('sf-email') || source.includes('salesforce'))
-      return { label: 'Salesforce', icon: '☁' };
-    return { label: source, icon: '🔌' };
+      return { label: 'Salesforce', icon: Cloud };
+    if (normalizedSource.includes('mattermost'))
+      return { label: 'Mattermost', icon: MessageCircle };
+    if (normalizedSource.includes('schedule'))
+      return { label: 'Schedule', icon: CalendarClock };
+    return { label: source, icon: Cable };
   }
-  if (task.message_channel) return { label: 'Message', icon: '💬' };
-  return { label: 'API', icon: '⌘' };
+  if (task.message_channel) return { label: 'Message', icon: MessageCircle };
+  return { label: 'API', icon: Webhook };
 }
 
 function formatJsonValue(value: unknown): string {
@@ -1640,8 +1655,9 @@ export default function SessionDetailPage() {
       'text-[var(--color-warning)] bg-[var(--color-warning)]/10 border-[var(--color-warning)]/20',
   };
 
+  const origin = deriveOrigin(task);
+
   if (!session && task.status === 'queued') {
-    const origin = deriveOrigin(task);
     const metadataEntries = Object.entries(task.metadata ?? {});
 
     return (
@@ -1668,8 +1684,13 @@ export default function SessionDetailPage() {
               <div className="flex flex-wrap items-center gap-x-5 gap-y-1 pt-1 text-xs text-[var(--color-text-tertiary)]">
                 <span className="inline-flex items-center gap-2">
                   <span className="uppercase tracking-[0.15em]">Origin</span>
-                  <span className="text-sm text-[var(--color-text-secondary)]">
-                    {origin.icon} {origin.label}
+                  <span className="inline-flex items-center gap-1.5 text-sm text-[var(--color-text-secondary)]">
+                    <origin.icon
+                      aria-hidden="true"
+                      size={15}
+                      strokeWidth={1.8}
+                    />
+                    {origin.label}
                   </span>
                 </span>
                 <span className="inline-flex items-center gap-2">
@@ -1827,6 +1848,13 @@ export default function SessionDetailPage() {
             <p className="font-mono text-[10px] text-[var(--color-text-tertiary)]">
               {taskId}
             </p>
+            <div className="flex items-center gap-2 pt-1 text-xs text-[var(--color-text-tertiary)]">
+              <span className="uppercase tracking-[0.15em]">Origin</span>
+              <span className="inline-flex items-center gap-1.5 text-sm text-[var(--color-text-secondary)]">
+                <origin.icon aria-hidden="true" size={15} strokeWidth={1.8} />
+                {origin.label}
+              </span>
+            </div>
           </div>
           <div className="flex items-center gap-3">
             {RERUNNABLE_STATUSES.has(task.status) && (

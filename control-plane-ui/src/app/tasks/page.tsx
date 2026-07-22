@@ -2,6 +2,15 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import {
+  Cable,
+  CalendarClock,
+  Cloud,
+  MessageCircle,
+  ServerCog,
+  Webhook,
+  type LucideIcon,
+} from 'lucide-react';
+import {
   apiFetch,
   type Task,
   type TaskArchiveResult,
@@ -37,35 +46,44 @@ function formatDuration(durationSec: number | null): string {
   return `${(durationSec / 60).toFixed(1)}m`;
 }
 
-const CHANNEL_DISPLAY: Record<string, { label: string; icon: string }> = {
-  salesforce: { label: 'Salesforce', icon: '☁' },
-  servicenow: { label: 'ServiceNow', icon: '⚡' },
-  message: { label: 'Message', icon: '💬' },
-  schedule: { label: 'Schedule', icon: '⏱' },
-  api: { label: 'API', icon: '⌘' },
+type Origin = { label: string; icon: LucideIcon };
+
+const CHANNEL_DISPLAY: Record<string, Origin> = {
+  salesforce: { label: 'Salesforce', icon: Cloud },
+  servicenow: { label: 'ServiceNow', icon: ServerCog },
+  mattermost: { label: 'Mattermost', icon: MessageCircle },
+  message: { label: 'Message', icon: MessageCircle },
+  schedule: { label: 'Schedule', icon: CalendarClock },
+  'gcp-pubsub': { label: 'GCP Pub/Sub', icon: Cable },
+  api: { label: 'API', icon: Webhook },
 };
 
-function deriveOrigin(task: Task): { label: string; icon: string } {
+function deriveOrigin(task: Task): Origin {
   if (task.channel && CHANNEL_DISPLAY[task.channel]) {
     return CHANNEL_DISPLAY[task.channel];
   }
   if (task.channel) {
-    return { label: task.channel, icon: '🔌' };
+    return { label: task.channel, icon: Cable };
   }
   /* Fallback for rows without channel (pre-migration) */
   const meta = task.metadata as Record<string, unknown>;
   if (meta?.triggered_by === 'scheduler')
-    return { label: 'Schedule', icon: '⏱' };
+    return { label: 'Schedule', icon: CalendarClock };
   const source = meta?.source;
   if (typeof source === 'string') {
-    if (source.includes('servicenow'))
-      return { label: 'ServiceNow', icon: '⚡' };
+    const normalizedSource = source.toLowerCase();
+    if (normalizedSource.includes('servicenow'))
+      return { label: 'ServiceNow', icon: ServerCog };
     if (source.includes('sf-email') || source.includes('salesforce'))
-      return { label: 'Salesforce', icon: '☁' };
-    return { label: source, icon: '🔌' };
+      return { label: 'Salesforce', icon: Cloud };
+    if (normalizedSource.includes('mattermost'))
+      return { label: 'Mattermost', icon: MessageCircle };
+    if (normalizedSource.includes('schedule'))
+      return { label: 'Schedule', icon: CalendarClock };
+    return { label: source, icon: Cable };
   }
-  if (task.message_channel) return { label: 'Message', icon: '💬' };
-  return { label: 'API', icon: '⌘' };
+  if (task.message_channel) return { label: 'Message', icon: MessageCircle };
+  return { label: 'API', icon: Webhook };
 }
 
 export default function QueuePage() {
@@ -317,7 +335,11 @@ export default function QueuePage() {
                         className="inline-flex items-center gap-1"
                         title={origin.label}
                       >
-                        <span className="text-xs">{origin.icon}</span>
+                        <origin.icon
+                          aria-hidden="true"
+                          size={14}
+                          strokeWidth={1.8}
+                        />
                         <span className="hidden lg:inline">{origin.label}</span>
                       </span>
                     </td>
