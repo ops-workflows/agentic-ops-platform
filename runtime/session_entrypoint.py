@@ -113,7 +113,7 @@ CONTROL_PLANE_UI_URL = os.environ.get("CONTROL_PLANE_UI_URL", "").strip().rstrip
 CLAUDE_SETTINGS_PATH = PLUGIN_DIR / ".claude" / "settings.json"
 HOOKS_CONFIG_PATH = PLUGIN_DIR / "hooks" / "hooks.json"
 ASK_USER_QUESTION_REMINDER_ENABLED = os.environ.get(
-    "ASK_USER_QUESTION_REMINDER_ENABLED", "true"
+    "ASK_USER_QUESTION_REMINDER_ENABLED", "false"
 ).strip().lower() not in {"0", "false", "no", "off"}
 ASK_USER_QUESTION_REMINDER_MIN_TURNS = max(
     1,
@@ -967,9 +967,11 @@ def _parse_question_response(response: str, question: dict[str, Any]) -> str:
 def _ask_user_question_reminder_text() -> str:
     return (
         "Harness reminder: if you are stuck, missing key facts, or need a human decision, "
-        "summarize the problem and your findings so far, then use AskUserQuestion with one "
-        "specific next-step question. If the investigation is progressing and you are close to "
-        "a conclusion, continue without asking."
+        "first review the active specialists. You may use SendMessage with each active agent id to ask "
+        "whether it is nearing completion, blocked, or needs a specific decision; include the required "
+        "short summary with every SendMessage. Use their replies to synthesize a conclusion or one "
+        "specific AskUserQuestion for the human. Do not ask a human question merely to check specialist "
+        "progress. If the investigation is progressing and you are close to a conclusion, continue without asking."
     )
 
 
@@ -1007,6 +1009,22 @@ def _estimated_turns(progress_state: dict[str, Any]) -> int:
     return int(progress_state.get("turns") or 0)
 
 
+def _annotate_workflow_usage(data: dict[str, Any], token_totals: dict[str, int]) -> dict[str, Any]:
+    task_id = str(data.get("task_id") or "").strip()
+    usage = data.get("usage")
+    observed = usage.get("total_tokens") if isinstance(usage, dict) else None
+    if not task_id or not isinstance(observed, (int, float)):
+        return data
+
+    token_totals[task_id] = max(token_totals.get(task_id, 0), int(observed))
+    annotated = dict(data)
+    annotated["workflow_usage"] = {
+        "total_tokens": sum(token_totals.values()),
+        "agent_count": len(token_totals),
+    }
+    return annotated
+
+
 def _should_send_ask_user_question_reminder(
     progress_state: dict[str, Any],
     *,
@@ -1020,7 +1038,10 @@ def _should_send_ask_user_question_reminder(
         return False, {}
 
     turns = _estimated_turns(progress_state)
-    if turns < ASK_USER_QUESTION_REMINDER_MIN_TURNS:
+    elapsed_sec = max(0.0, time.monotonic() - query_started_at)
+    time_threshold_sec = RUNTIME_TIMEOUT_SEC * ASK_USER_QUESTION_REMINDER_TIME_RATIO if RUNTIME_TIMEOUT_SEC > 0 else 0.0
+    time_triggered = time_threshold_sec > 0 and elapsed_sec >= time_threshold_sec
+    if turns < ASK_USER_QUESTION_REMINDER_MIN_TURNS and not time_triggered:
         return False, {}
 
     last_question_turn = progress_state.get("last_ask_user_question_turn")
@@ -1030,11 +1051,8 @@ def _should_send_ask_user_question_reminder(
     ):
         return False, {}
 
-    elapsed_sec = max(0.0, time.monotonic() - query_started_at)
     turn_threshold = max(ASK_USER_QUESTION_REMINDER_MIN_TURNS, int(MAX_TURNS * ASK_USER_QUESTION_REMINDER_TURN_RATIO))
-    time_threshold_sec = RUNTIME_TIMEOUT_SEC * ASK_USER_QUESTION_REMINDER_TIME_RATIO if RUNTIME_TIMEOUT_SEC > 0 else 0.0
     turn_triggered = MAX_TURNS > 0 and turns >= turn_threshold
-    time_triggered = time_threshold_sec > 0 and elapsed_sec >= time_threshold_sec
     if not (turn_triggered or time_triggered):
         return False, {}
 
@@ -1045,6 +1063,15 @@ def _should_send_ask_user_question_reminder(
         "time_threshold_sec": round(time_threshold_sec, 3),
         "trigger": "turn_budget" if turn_triggered else "time_budget",
     }
+
+
+def _thinking_config_from_env() -> tuple[dict[str, str] | None, str]:
+    mode = os.environ.get("CLAUDE_CODE_THINKING_MODE", "").strip().lower()
+    if mode in {"", "auto", "default", "on", "enabled", "true", "1"}:
+        return None, "provider_default"
+    if mode in {"off", "disabled", "false", "0"}:
+        return {"type": "disabled"}, "disabled"
+    raise ValueError("CLAUDE_CODE_THINKING_MODE must be one of: default, on, off")
 
 
 async def _handle_ask_user_question(
@@ -1065,13 +1092,6 @@ async def _handle_ask_user_question(
 
     answers: dict[str, str] = {}
     progress_state["last_ask_user_question_turn"] = _estimated_turns(progress_state)
-    await report_event(
-        "user_question_requested",
-        {
-            "question_count": len(tool_input.get("questions", [])),
-            "thread_id_present": bool(_current_thread_id()),
-        },
-    )
     for question in tool_input.get("questions", []):
         lines = [
             ":question: **Clarification Needed**",
@@ -1113,6 +1133,14 @@ async def _handle_ask_user_question(
                 message="Unable to deliver AskUserQuestion through the configured message bus",
                 interrupt=True,
             )
+
+        await report_event(
+            "user_question_requested",
+            {
+                "question_count": len(tool_input.get("questions", [])),
+                "thread_id_present": bool(_current_thread_id()),
+            },
+        )
 
         reply = await _wait_for_thread_reply(
             secret_env,
@@ -1532,12 +1560,14 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
     permission_mode = os.environ.get("CLAUDE_PERMISSION_MODE") or None
     claude_cli_path = _resolve_claude_cli_path()
     options = ClaudeAgentOptions(
-        tools={"type": "preset", "preset": "claude_code"},
         max_turns=MAX_TURNS,
         cwd=str(PLUGIN_DIR),
         cli_path=claude_cli_path,
         permission_mode=permission_mode,
     )
+    thinking_config, thinking_mode = _thinking_config_from_env()
+    if thinking_config is not None:
+        options.thinking = thinking_config
 
     project_mcp_servers = _load_project_mcp_servers_config()
     if project_mcp_servers is not None:
@@ -1565,6 +1595,7 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
     flush_lock = asyncio.Lock()
     tool_names_by_use_id: dict[str, str] = {}
     empty_subagent_retries: set[str] = set()
+    subagent_token_totals: dict[str, int] = {}
     progress_state.update(
         {
             "input_tokens": 0,
@@ -1685,12 +1716,51 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
 
     prompt_queue = _new_prompt_queue(TASK_PROMPT)
 
+    async def inject_ask_user_question_reminder(reminder_context: dict[str, Any]) -> None:
+        if progress_state.get("ask_user_question_reminder_sent"):
+            return
+        progress_state["ask_user_question_reminder_sent"] = True
+        reminder_text = _ask_user_question_reminder_text()
+        await prompt_queue.put(
+            {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": reminder_text,
+                },
+            }
+        )
+        await append_transcript_messages(
+            [
+                _transcript_text_message(
+                    "user",
+                    reminder_text,
+                    source="ask_user_question_reminder",
+                    meta=reminder_context,
+                )
+            ]
+        )
+        await report_event("ask_user_question_reminder", reminder_context)
+
+    async def ask_user_question_reminder_loop() -> None:
+        while not progress_state.get("ask_user_question_reminder_sent"):
+            await asyncio.sleep(1.0)
+            should_remind, reminder_context = _should_send_ask_user_question_reminder(
+                progress_state,
+                query_started_at=query_started_at,
+            )
+            if should_remind:
+                await inject_ask_user_question_reminder(reminder_context)
+                return
+
     await report_event(
         "session_phase",
         {
             "phase": "claude_query_start",
             "approval_patterns": approval_patterns,
             "deny_patterns": deny_patterns,
+            "thinking_mode": thinking_mode,
+            "legacy_max_thinking_tokens": os.environ.get("MAX_THINKING_TOKENS", ""),
         },
     )
 
@@ -1721,6 +1791,7 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
 
     query_task = _start_query_attempt()
     timed_flush_task = asyncio.create_task(conversation_batch_flush_loop())
+    reminder_task = asyncio.create_task(ask_user_question_reminder_loop())
     first_message_received = False
 
     try:
@@ -1832,6 +1903,8 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
                 msg_record["type"] = "system"
                 msg_record["subtype"] = message.subtype
                 safe_data = _json_safe_value(message.data or {})
+                if message.subtype in {"task_progress", "task_notification"} and isinstance(safe_data, dict):
+                    safe_data = _annotate_workflow_usage(safe_data, subagent_token_totals)
                 msg_record["data"] = safe_data
                 # Track async subagent lifecycle so we don't close stdin while a
                 # subagent still needs to answer tool permission requests.
@@ -1898,27 +1971,7 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
                 query_started_at=query_started_at,
             )
             if should_remind:
-                progress_state["ask_user_question_reminder_sent"] = True
-                await prompt_queue.put(
-                    {
-                        "type": "user",
-                        "message": {
-                            "role": "user",
-                            "content": _ask_user_question_reminder_text(),
-                        },
-                    }
-                )
-                await append_transcript_messages(
-                    [
-                        _transcript_text_message(
-                            "user",
-                            _ask_user_question_reminder_text(),
-                            source="ask_user_question_reminder",
-                            meta=reminder_context,
-                        )
-                    ]
-                )
-                await report_event("ask_user_question_reminder", reminder_context)
+                await inject_ask_user_question_reminder(reminder_context)
     finally:
         if not query_task.done():
             query_task.cancel()
@@ -1927,6 +1980,9 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
         timed_flush_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await timed_flush_task
+        reminder_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await reminder_task
 
     # Flush remaining conversation messages
     await flush_conversation_batches(force=True)

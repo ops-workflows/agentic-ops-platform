@@ -205,7 +205,7 @@ function mcpDetailsHref(serverId: string): string {
 export function PluginPreview({
   agentYaml,
   files,
-  emptyMessage = 'No plugin files loaded yet.',
+  emptyMessage = 'No workflow files loaded yet.',
   showFiles = true,
 }: PluginPreviewProps) {
   const allFiles = useMemo(() => {
@@ -304,7 +304,7 @@ export function PluginPreview({
       >
         <div className="bg-ops-surface border border-ops-border rounded-card p-5">
           <h4 className="font-medium text-[var(--color-text-primary)] mb-3">
-            Plugin Graph
+            Workflow Graph
           </h4>
           <div className="space-y-3 text-left">
             <div className="flex items-center gap-3">
@@ -383,7 +383,7 @@ export function PluginPreview({
           <div className="bg-ops-surface border border-ops-border rounded-card overflow-hidden">
             <div className="px-4 py-2.5 border-b border-ops-border flex items-center justify-between">
               <h4 className="font-medium text-[var(--color-text-primary)]">
-                Plugin Files
+                Workflow Files
               </h4>
               <span className="text-xs text-[var(--color-text-tertiary)]">
                 {filePaths.length} files

@@ -2,6 +2,28 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
+  Bot,
+  Brain,
+  CircleDot,
+  CircleUserRound,
+  ChevronDown,
+  ChevronRight,
+  Clock3,
+  GitFork,
+  MessageSquare,
+  PlugZap,
+  Puzzle,
+  Send,
+  Sparkles,
+  Terminal,
+  Wrench,
+  XCircle,
+  type LucideIcon,
+} from 'lucide-react';
+import { Highlight, themes } from 'prism-react-renderer';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import {
   apiFetch,
   type SessionDetail,
   type SessionEvent,
@@ -22,6 +44,8 @@ type NodeKind =
   | 'session'
   | 'user'
   | 'assistant'
+  | 'thinking'
+  | 'messaging'
   | 'tool_call'
   | 'tool_result'
   | 'subagent'
@@ -121,6 +145,22 @@ function formatJsonValue(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function formatTraceBody(input: string): string {
+  try {
+    return JSON.stringify(JSON.parse(input), null, 2);
+  } catch {
+    return input;
+  }
+}
+
+function getJsonBody(input: string): string | undefined {
+  try {
+    return JSON.stringify(JSON.parse(input), null, 2);
+  } catch {
+    return undefined;
+  }
+}
+
 function epochToIso(v: unknown, fallback: string): string {
   return typeof v === 'number' ? new Date(v * 1000).toISOString() : fallback;
 }
@@ -169,6 +209,83 @@ function parseSkillPreview(input: string): string | undefined {
   }
 }
 
+function parseSendMessagePreview(input: string): {
+  recipientId?: string;
+  message?: string;
+  summary?: string;
+} {
+  try {
+    const parsed = JSON.parse(input) as Record<string, unknown>;
+    return {
+      recipientId:
+        typeof parsed.to === 'string'
+          ? parsed.to
+          : typeof parsed.recipient === 'string'
+            ? parsed.recipient
+            : undefined,
+      message:
+        typeof parsed.message === 'string'
+          ? parsed.message
+          : typeof parsed.content === 'string'
+            ? parsed.content
+            : undefined,
+      summary: typeof parsed.summary === 'string' ? parsed.summary : undefined,
+    };
+  } catch {
+    return {
+      recipientId: input.match(/"(?:to|recipient)"\s*:\s*"([^"]+)"/)?.[1],
+      message: input.match(/"(?:message|content)"\s*:\s*"([^"]+)"/)?.[1],
+      summary: input.match(/"summary"\s*:\s*"([^"]+)"/)?.[1],
+    };
+  }
+}
+
+function parseSendMessageResult(input: string): {
+  message?: string;
+  recipientId?: string;
+} {
+  const nestedJsonMatch = input.match(
+    /["']text["']\s*:\s*["'](\{.*\})["']\s*}/,
+  );
+  const normalized = nestedJsonMatch?.[1]?.replace(/\\"/g, '"') ?? input;
+  try {
+    const parsed = JSON.parse(normalized) as Record<string, unknown>;
+    return {
+      message: typeof parsed.message === 'string' ? parsed.message : undefined,
+      recipientId:
+        typeof parsed.recipient === 'string'
+          ? parsed.recipient
+          : typeof parsed.to === 'string'
+            ? parsed.to
+            : undefined,
+    };
+  } catch {
+    const messageMatch = input.match(
+      /"message"\s*:\s*"([\s\S]*?)"\s*,\s*"(?:resumedAgentId|pin|recipient|success)"/,
+    );
+    if (messageMatch) {
+      let message = messageMatch[1];
+      for (let index = 0; index < 2; index++) {
+        message = message.replace(/\\"/g, '"');
+      }
+      return {
+        message: message.replace(/\\'/g, "'").replace(/\\n/g, '\n'),
+        recipientId: input.match(
+          /(?:delivery to|recipient[":\s]+)([\w-]+)/i,
+        )?.[1],
+      };
+    }
+    return {
+      message: input
+        .match(/"message"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/)?.[1]
+        ?.replace(/\\"/g, '"'),
+      recipientId: input.match(
+        /(?:delivery to|recipient[":\s]+)([\w-]+)/i,
+      )?.[1],
+    };
+  }
+}
+
 function summarizeTaskType(value: unknown): string | undefined {
   if (typeof value !== 'string' || !value.trim()) return undefined;
   return value.replace(/_/g, ' ');
@@ -197,6 +314,7 @@ function isDuplicateNarrative(left?: string, right?: string): boolean {
 function buildTree(
   events: SessionEvent[],
   fullPrompt?: string,
+  includeThinking = false,
 ): {
   root: TraceNode;
   stats: SessionStats;
@@ -208,7 +326,7 @@ function buildTree(
     id: 'root',
     kind: 'session',
     timestamp: events[0]?.timestamp ?? new Date().toISOString(),
-    label: 'Session',
+    label: 'Trace',
     children: [],
   };
 
@@ -220,6 +338,7 @@ function buildTree(
   // messages carry that id in parent_tool_use_id, letting us nest their real
   // activity under the correct branch regardless of interleaving order.
   const subagentNodesByToolId = new Map<string, TraceNode>();
+  const subagentNamesByAgentId = new Map<string, string>();
   const resultNodes: TraceNode[] = [];
   const skillNames = new Set<string>();
   // MCP servers actually used, derived from tool calls named mcp__<server>__<tool>.
@@ -239,6 +358,15 @@ function buildTree(
 
   function currentParent(): TraceNode {
     return activeSubagent ?? root;
+  }
+
+  function appendSubagentResult(parent: TraceNode, result: TraceNode) {
+    parent.children.push({
+      ...result,
+      kind: 'result',
+      label: '',
+      meta: { ...(result.meta ?? {}), result_role: 'subagent_return' },
+    });
   }
 
   // Resolve the owning branch for a conversation message. Subagent messages set
@@ -267,6 +395,7 @@ function buildTree(
     if (event.event_type === 'session_start') {
       if (typeof data.agent === 'string' && data.agent.trim()) {
         defaultAgent = data.agent.trim();
+        root.label = defaultAgent;
       }
       // Prefer the full task prompt over the truncated preview so the initial
       // message is shown in full.
@@ -281,9 +410,10 @@ function buildTree(
         id: event.id,
         kind: 'lifecycle',
         timestamp: event.timestamp,
-        label: 'Session started',
-        detail: typeof data.workflow === 'string' ? data.workflow : undefined,
+        label: '',
+        detail: '',
         body: promptBody,
+        badge: 'REQUEST',
         children: [],
         raw: data,
       });
@@ -338,6 +468,17 @@ function buildTree(
         /* ── Assistant message ── */
         if (msg.type === 'assistant') {
           const text = flatText(content);
+          const thinking = content
+            .filter(
+              (b: unknown): b is Record<string, unknown> =>
+                !!b &&
+                typeof b === 'object' &&
+                (b as Record<string, unknown>).type === 'thinking' &&
+                typeof (b as Record<string, unknown>).preview === 'string',
+            )
+            .map((b) => b.preview as string)
+            .join('\n\n')
+            .trim();
           const toolBlocks = content.filter(
             (b: unknown): b is Record<string, unknown> =>
               !!b &&
@@ -351,8 +492,20 @@ function buildTree(
               id: `${event.id}-a-${i}`,
               kind: 'assistant',
               timestamp: ts,
-              label: 'Assistant',
+              label: '',
               body: text,
+              children: [],
+              raw: msg,
+            });
+          }
+
+          if (includeThinking && thinking) {
+            resolveMsgParent(msg).children.push({
+              id: `${event.id}-think-${i}`,
+              kind: 'thinking',
+              timestamp: ts,
+              label: 'Reasoning',
+              body: thinking,
               children: [],
               raw: msg,
             });
@@ -368,9 +521,17 @@ function buildTree(
                 ? parseSkillPreview(block.input_preview)
                 : undefined;
             const resolvedToolName =
-              toolName === 'Skill' && skillName
-                ? `Skill · ${skillName}`
-                : toolName;
+              toolName === 'Skill' && skillName ? skillName : toolName;
+            const isSkill = toolName === 'Skill' && Boolean(skillName);
+            const mcpMatch = toolName.match(/^mcp__([^_]+)__(.+)$/);
+            const isMcp = Boolean(mcpMatch);
+            const traceToolName = mcpMatch
+              ? `${mcpMatch[1]} · ${mcpMatch[2]}`
+              : resolvedToolName;
+            const toolInput =
+              !isSkill && typeof block.input_preview === 'string'
+                ? formatTraceBody(block.input_preview)
+                : undefined;
             toolNameMap.set(toolId, resolvedToolName);
             if (skillName) {
               skillNames.add(skillName);
@@ -381,19 +542,34 @@ function buildTree(
             }
             stats.toolCalls++;
 
+            const isInternalMessage = toolName === 'SendMessage';
+            const messageInfo =
+              isInternalMessage && typeof block.input_preview === 'string'
+                ? parseSendMessagePreview(block.input_preview)
+                : undefined;
+            const parent = resolveMsgParent(msg);
+            const sender =
+              parent === root ? (defaultAgent ?? 'Coordinator') : parent.label;
             const toolNode: TraceNode = {
               id: `${event.id}-tc-${toolId}`,
-              kind: 'tool_call',
+              kind: isInternalMessage ? 'messaging' : 'tool_call',
               timestamp: ts,
-              label: resolvedToolName,
-              detail:
-                typeof block.input_preview === 'string'
-                  ? block.input_preview
-                  : undefined,
+              label: isInternalMessage
+                ? `${sender} -> ${messageInfo?.recipientId ?? 'specialist'}`
+                : traceToolName,
+              body: isInternalMessage
+                ? messageInfo?.message
+                : isSkill
+                  ? undefined
+                  : toolInput,
+              badge: isSkill ? 'SKILL' : isMcp ? 'MCP' : undefined,
               children: [],
               raw: block,
               meta: {
                 tool_use_id: toolId,
+                ...(isInternalMessage && messageInfo?.recipientId
+                  ? { recipient_id: messageInfo.recipientId }
+                  : {}),
                 ...(skillName ? { skill: skillName } : {}),
               },
             };
@@ -436,14 +612,12 @@ function buildTree(
             typeof msg.content_preview === 'string' ? msg.content_preview : '';
           const isErr = Boolean(msg.is_error);
           if (isErr) stats.toolErrors++;
-          const resolvedName = toolNameMap.get(toolUseId) ?? toolUseId;
-
           const resultNode: TraceNode = {
             id: `${event.id}-tr-${i}`,
             kind: 'tool_result',
             timestamp: ts,
-            label: resolvedName,
-            body: preview,
+            label: '',
+            body: formatTraceBody(preview),
             isError: isErr,
             children: [],
             raw: msg,
@@ -452,6 +626,30 @@ function buildTree(
 
           const parentCall = pendingToolCalls.get(toolUseId);
           if (parentCall) {
+            if (parentCall.kind === 'messaging') {
+              const delivery = parseSendMessageResult(preview);
+              parentCall.children.push({
+                ...resultNode,
+                kind: 'result',
+                label: '',
+                body: formatTraceBody(delivery.message ?? preview),
+              });
+              pendingToolCalls.delete(toolUseId);
+              continue;
+            }
+            if (parentCall.kind === 'subagent') {
+              const agentId = preview.match(/agentId:\s*['"]?([\w-]+)/)?.[1];
+              if (agentId) {
+                subagentNamesByAgentId.set(agentId, parentCall.label);
+                parentCall.meta = {
+                  ...(parentCall.meta ?? {}),
+                  agent_id: agentId,
+                };
+              }
+              appendSubagentResult(parentCall, resultNode);
+              pendingToolCalls.delete(toolUseId);
+              continue;
+            }
             parentCall.children.push(resultNode);
             pendingToolCalls.delete(toolUseId);
           } else {
@@ -469,8 +667,6 @@ function buildTree(
             const toolUseId = toolUseIdMatch[1];
             const isErr = /is_error=True/.test(msg.repr as string);
             if (isErr) stats.toolErrors++;
-            const resolvedName = toolNameMap.get(toolUseId) ?? toolUseId;
-
             const contentStart = (msg.repr as string).indexOf('content=');
             const contentEnd = (msg.repr as string).lastIndexOf(', is_error=');
             let body = '';
@@ -491,8 +687,8 @@ function buildTree(
               id: `${event.id}-utr-${i}`,
               kind: 'tool_result',
               timestamp: ts,
-              label: resolvedName,
-              body,
+              label: '',
+              body: formatTraceBody(body),
               isError: isErr,
               children: [],
               raw: msg,
@@ -501,6 +697,11 @@ function buildTree(
 
             const parentCall = pendingToolCalls.get(toolUseId);
             if (parentCall) {
+              if (parentCall.kind === 'subagent') {
+                appendSubagentResult(parentCall, resultNode);
+                pendingToolCalls.delete(toolUseId);
+                continue;
+              }
               parentCall.children.push(resultNode);
               pendingToolCalls.delete(toolUseId);
             } else {
@@ -519,7 +720,12 @@ function buildTree(
               ? (msg.data as Record<string, unknown>)
               : {};
 
-          if (subtype === 'thinking_tokens') {
+          if (
+            subtype === 'thinking_tokens' ||
+            subtype === 'init' ||
+            subtype === 'task_updated' ||
+            subtype === 'task_notification'
+          ) {
             continue;
           }
 
@@ -553,35 +759,16 @@ function buildTree(
                 subagentsByTaskId.set(taskId, subagentNode);
               }
 
-              subagentNode.children.push({
-                id: `${event.id}-sts-${i}`,
-                kind: 'lifecycle',
-                timestamp: ts,
-                label: 'task started',
-                detail: description,
-                children: [],
-                raw: msg,
-              });
               activeSubagent = subagentNode;
               continue;
             }
 
-            currentParent().children.push({
-              id: `${event.id}-sys-${i}`,
-              kind: 'lifecycle',
-              timestamp: ts,
-              label: 'task started',
-              detail: description,
-              children: [],
-              raw: msg,
-              meta: taskId ? { task_id: taskId } : undefined,
-            });
             continue;
           }
 
           if (subtype === 'task_progress') {
-            // Progress pings duplicate the subagent's real tool activity (now
-            // nested via parent_tool_use_id), so they only add noise. Skip them.
+            // Progress pings duplicate the subagent's real tool activity and
+            // only add noise to the task trace.
             continue;
           }
 
@@ -621,11 +808,14 @@ function buildTree(
             id: `${event.id}-res-${i}`,
             kind: 'result',
             timestamp: ts,
-            label: 'Result Snapshot',
+            label: 'Snapshot',
             body: preview,
             children: [],
             raw: msg,
-            meta: turns ? { turns: String(turns) } : undefined,
+            meta: {
+              result_role: 'session_result',
+              ...(turns ? { turns: String(turns) } : {}),
+            },
           };
           resultNodes.push(resultNode);
           root.children.push(resultNode);
@@ -650,7 +840,7 @@ function buildTree(
           resultNodes[resultNodes.length - 1] ??
           [...root.children].reverse().find((n) => n.kind === 'result');
         if (resultNode) {
-          resultNode.label = 'Final Result';
+          resultNode.label = 'Final';
           if (fullResult.length > (resultNode.body?.length ?? 0))
             resultNode.body = fullResult;
         } else {
@@ -658,22 +848,14 @@ function buildTree(
             id: `${event.id}-res`,
             kind: 'result',
             timestamp: event.timestamp,
-            label: 'Final Result',
+            label: 'Final',
             body: fullResult,
             children: [],
             raw: data,
+            meta: { result_role: 'session_result' },
           });
         }
       }
-      root.children.push({
-        id: event.id,
-        kind: 'lifecycle',
-        timestamp: event.timestamp,
-        label: 'session complete',
-        detail: 'Final result persisted',
-        children: [],
-        raw: data,
-      });
       if (typeof data.input_tokens === 'number')
         stats.tokensIn = data.input_tokens as number;
       if (typeof data.output_tokens === 'number')
@@ -746,6 +928,38 @@ function buildTree(
     }
   }
 
+  function replaceRecipientIds(nodes: TraceNode[]) {
+    for (const node of nodes) {
+      if (node.kind === 'messaging' && node.meta?.recipient_id) {
+        const recipient = subagentNamesByAgentId.get(node.meta.recipient_id);
+        if (recipient) {
+          node.label = node.label.replace(node.meta.recipient_id, recipient);
+          node.meta = { ...node.meta, recipient };
+        }
+      }
+      replaceRecipientIds(node.children);
+    }
+  }
+  replaceRecipientIds(root.children);
+
+  function moveCanonicalResultsToEnd(node: TraceNode) {
+    for (const child of node.children) {
+      moveCanonicalResultsToEnd(child);
+    }
+    const canonicalResults = node.children.filter(
+      (child) =>
+        child.meta?.result_role === 'subagent_return' ||
+        (node === root && child.meta?.result_role === 'session_result'),
+    );
+    if (canonicalResults.length) {
+      node.children = [
+        ...node.children.filter((child) => !canonicalResults.includes(child)),
+        ...canonicalResults,
+      ];
+    }
+  }
+  moveCanonicalResultsToEnd(root);
+
   return {
     root,
     stats,
@@ -761,77 +975,97 @@ function buildTree(
 
 const KIND_CONFIG: Record<
   NodeKind,
-  { icon: string; accent: string; bg: string; border: string; badge?: string }
+  {
+    icon: LucideIcon;
+    accent: string;
+    bg: string;
+    border: string;
+    badge?: string;
+  }
 > = {
   session: {
-    icon: '◉',
+    icon: CircleDot,
     accent: 'text-[var(--color-info)]',
     bg: 'bg-[var(--color-info)]/8',
     border: 'border-[var(--color-info)]/20',
   },
   user: {
-    icon: '◌',
+    icon: CircleUserRound,
     accent: 'text-[var(--color-accent)]',
     bg: 'bg-[var(--color-accent)]/8',
     border: 'border-[var(--color-accent)]/20',
     badge: 'USER',
   },
   assistant: {
-    icon: '●',
-    accent: 'text-[var(--color-text-primary)]',
-    bg: 'bg-ops-surface-raised',
-    border: 'border-ops-border',
-    badge: 'AI',
+    icon: Bot,
+    accent: 'text-[#B9823A]',
+    bg: 'bg-[#B9823A]/8',
+    border: 'border-[#B9823A]/20',
+    badge: 'ASSISTANT',
+  },
+  thinking: {
+    icon: Brain,
+    accent: 'text-[#818CF8]',
+    bg: 'bg-[#818CF8]/8',
+    border: 'border-[#818CF8]/20',
+    badge: 'THINKING',
+  },
+  messaging: {
+    icon: Send,
+    accent: 'text-[var(--color-info)]',
+    bg: 'bg-[var(--color-info)]/8',
+    border: 'border-[var(--color-info)]/20',
+    badge: 'AGENT MSG',
   },
   tool_call: {
-    icon: '▸',
+    icon: Wrench,
     accent: 'text-[var(--color-warning)]',
     bg: 'bg-[var(--color-warning)]/8',
     border: 'border-[var(--color-warning)]/20',
-    badge: 'CALL',
+    badge: 'TOOL',
   },
   tool_result: {
-    icon: '◂',
+    icon: Terminal,
     accent: 'text-[var(--color-success)]',
     bg: 'bg-[var(--color-success)]/8',
     border: 'border-[var(--color-success)]/20',
     badge: 'RESULT',
   },
   subagent: {
-    icon: '◈',
-    accent: 'text-[#A78BCA]',
-    bg: 'bg-[#A78BCA]/8',
-    border: 'border-[#A78BCA]/20',
+    icon: GitFork,
+    accent: 'text-[#A65A7A]',
+    bg: 'bg-[#A65A7A]/8',
+    border: 'border-[#A65A7A]/20',
     badge: 'SUBAGENT',
   },
   subagent_progress: {
-    icon: '⋯',
-    accent: 'text-[#A78BCA]/70',
-    bg: 'bg-[#A78BCA]/5',
-    border: 'border-[#A78BCA]/15',
+    icon: Clock3,
+    accent: 'text-[#A65A7A]/70',
+    bg: 'bg-[#A65A7A]/5',
+    border: 'border-[#A65A7A]/15',
   },
   hook: {
-    icon: '⤷',
+    icon: Puzzle,
     accent: 'text-[#C08A8A]',
     bg: 'bg-[#C08A8A]/8',
     border: 'border-[#C08A8A]/20',
     badge: 'HOOK',
   },
   lifecycle: {
-    icon: '○',
+    icon: Clock3,
     accent: 'text-[var(--color-text-tertiary)]',
     bg: 'bg-ops-surface',
     border: 'border-ops-border-subtle',
   },
   result: {
-    icon: '✦',
+    icon: Terminal,
     accent: 'text-[var(--color-success)]',
     bg: 'bg-[var(--color-success)]/8',
     border: 'border-[var(--color-success)]/20',
     badge: 'RESULT',
   },
   error: {
-    icon: '✕',
+    icon: XCircle,
     accent: 'text-[var(--color-error)]',
     bg: 'bg-[var(--color-error)]/10',
     border: 'border-[var(--color-error)]/25',
@@ -851,6 +1085,134 @@ function getNodeConfig(node: TraceNode) {
   return base;
 }
 
+function getTraceIcon(node: TraceNode): LucideIcon {
+  if (node.badge === 'REQUEST') return MessageSquare;
+  if (node.badge === 'AGENT' || node.badge === 'ASSISTANT') return Bot;
+  if (node.badge === 'MCP') return PlugZap;
+  if (node.badge === 'SKILL') return Sparkles;
+  return getNodeConfig(node).icon;
+}
+
+function getBadgeTextClass(badge: string, isError: boolean): string {
+  if (isError) return 'text-[var(--color-error)]';
+
+  const badgeTextClasses: Record<string, string> = {
+    AGENT: 'text-[var(--color-info)]',
+    'AGENT MSG': 'text-[var(--color-info)]',
+    ASSISTANT: 'text-[#B9823A]',
+    ERROR: 'text-[var(--color-error)]',
+    HOOK: 'text-[#C08A8A]',
+    MCP: 'text-[#38BDF8]',
+    REQUEST: 'text-[#60A5FA]',
+    RESULT: 'text-[var(--color-success)]',
+    SKILL: 'text-[#A78BCA]',
+    SUBAGENT: 'text-[#A65A7A]',
+    THINKING: 'text-[#818CF8]',
+    TOOL: 'text-[var(--color-warning)]',
+    USER: 'text-[var(--color-accent)]',
+  };
+
+  return badgeTextClasses[badge] ?? 'text-[var(--color-text-tertiary)]';
+}
+
+function getBadgeClasses(badge: string, isError: boolean): string {
+  return `border-current/40 ${getBadgeTextClass(badge, isError)}`;
+}
+
+function JsonCode({
+  body,
+  compact = false,
+}: {
+  body: string;
+  compact?: boolean;
+}) {
+  return (
+    <Highlight code={body} language="json" theme={themes.vsDark}>
+      {({ className, getLineProps, getTokenProps, style, tokens }) => (
+        <pre
+          className={`${className} overflow-auto ${compact ? 'max-h-48 px-0 text-[10px]' : 'max-h-[400px] p-3 text-[13px]'} leading-relaxed`}
+          style={{ ...style, background: 'transparent' }}
+        >
+          {tokens.map((line, lineIndex) => (
+            <div
+              {...getLineProps({ line })}
+              key={`line-${lineIndex}-${line.join('')}`}
+            >
+              {line.map((token, tokenIndex) => (
+                <span
+                  {...getTokenProps({ token })}
+                  key={`token-${tokenIndex}-${token.content}`}
+                />
+              ))}
+            </div>
+          ))}
+        </pre>
+      )}
+    </Highlight>
+  );
+}
+
+function TraceBody({ body }: { body: string }) {
+  const json = getJsonBody(body);
+
+  if (json) {
+    return <JsonCode body={json} />;
+  }
+
+  return (
+    <div className="max-h-[400px] overflow-auto px-3 py-2 text-[13px] leading-relaxed text-[var(--color-text-secondary)]">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a: ({ children, href }) => (
+            <a
+              className="text-[var(--color-info)] underline underline-offset-2"
+              href={href}
+              rel="noreferrer"
+              target="_blank"
+            >
+              {children}
+            </a>
+          ),
+          code: ({ children }) => (
+            <code className="rounded bg-ops-surface-raised px-1 py-0.5 font-mono text-[12px]">
+              {children}
+            </code>
+          ),
+          h1: ({ children }) => (
+            <h1 className="mb-2 text-lg font-semibold text-[var(--color-text-primary)]">
+              {children}
+            </h1>
+          ),
+          h2: ({ children }) => (
+            <h2 className="mb-2 text-base font-semibold text-[var(--color-text-primary)]">
+              {children}
+            </h2>
+          ),
+          h3: ({ children }) => (
+            <h3 className="mb-1 text-sm font-semibold text-[var(--color-text-primary)]">
+              {children}
+            </h3>
+          ),
+          li: ({ children }) => <li className="ml-5 list-disc">{children}</li>,
+          ol: ({ children }) => <ol className="my-2">{children}</ol>,
+          p: ({ children }) => (
+            <p className="my-2 first:mt-0 last:mb-0">{children}</p>
+          ),
+          pre: ({ children }) => (
+            <pre className="my-2 overflow-auto rounded bg-ops-surface-raised p-2 font-mono text-[12px]">
+              {children}
+            </pre>
+          ),
+          ul: ({ children }) => <ul className="my-2">{children}</ul>,
+        }}
+      >
+        {body}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    Tree node component — recursive, collapsible
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -865,21 +1227,15 @@ function TraceNodeView({
   forceOpen?: boolean | null;
 }) {
   const hasChildren = node.children.length > 0;
+  const hasBody = Boolean(node.body);
   const defaultState = () => {
-    if (depth === 0) return true;
-    if (
-      node.kind === 'subagent' ||
-      node.kind === 'error' ||
-      node.kind === 'result'
-    )
-      return true;
-    if (node.kind === 'tool_call' && node.children.length > 0) return false;
-    return depth < 2;
+    return (
+      node.badge === 'REQUEST' ||
+      (node.kind === 'result' && node.label === 'Final')
+    );
   };
 
   const [open, setOpen] = useState(defaultState);
-  const [showBody, setShowBody] = useState(false);
-  const [showRaw, setShowRaw] = useState(false);
 
   useEffect(() => {
     if (forceOpen === true) setOpen(true);
@@ -887,113 +1243,73 @@ function TraceNodeView({
   }, [forceOpen]);
 
   const cfg = getNodeConfig(node);
+  const Icon = getTraceIcon(node);
+  const badge = node.badge ?? cfg.badge;
+  const iconAccent = badge
+    ? getBadgeTextClass(badge, Boolean(node.isError))
+    : cfg.accent;
+  const isExpandable = hasChildren || hasBody;
+  const ExpandIcon = open ? ChevronDown : ChevronRight;
+  const regularBorder = 'border-ops-border';
 
   return (
-    <div className={depth === 0 ? '' : 'relative'}>
+    <div className={`relative min-w-0 ${depth > 0 ? 'pl-6' : ''}`}>
       {depth > 0 && (
-        <div
-          className="absolute left-[11px] top-0 bottom-0 w-px bg-gradient-to-b from-ops-border to-transparent"
-          style={{ zIndex: 0 }}
-        />
+        <div className="absolute left-[11px] top-[14px] h-px w-3 bg-ops-border" />
       )}
-      <div className={`relative ${depth > 0 ? 'ml-6' : ''}`}>
-        {depth > 0 && (
-          <div className="absolute -left-[13px] top-[14px] w-3 h-px bg-ops-border" />
-        )}
-
+      <div className="relative min-w-0">
         {/* Node row */}
         <div
-          className={`group flex items-start gap-2 rounded-btn px-3 py-2 transition-all duration-150
-            ${hasChildren || node.body ? 'cursor-pointer hover:bg-ops-surface-raised/50' : ''} ${cfg.bg} border ${cfg.border}`}
+          className={`group flex min-w-0 items-start gap-2 rounded-btn px-3 py-2 transition-all duration-150
+            ${isExpandable ? 'cursor-pointer hover:bg-ops-surface-raised/50' : ''} ${cfg.bg} border ${regularBorder}`}
           onClick={() => {
-            if (hasChildren) setOpen(!open);
-            else if (node.body) setShowBody(!showBody);
+            if (isExpandable) setOpen(!open);
           }}
         >
           <span
-            className={`mt-0.5 flex-none text-[10px] w-3 text-center select-none ${cfg.accent}`}
+            className={`mt-0.5 flex h-3 w-3 flex-none items-center justify-center ${iconAccent}`}
           >
-            {hasChildren ? (open ? '▾' : '▸') : cfg.icon}
+            <Icon aria-hidden="true" size={13} strokeWidth={1.8} />
           </span>
-          {(node.badge ?? cfg.badge) && (
+          {badge && (
             <span
-              className={`flex-none mt-px rounded px-1.5 py-0.5 text-[9px] font-bold tracking-[0.15em] uppercase
-              ${node.isError ? 'bg-[var(--color-error)]/20 text-[var(--color-error)]' : `bg-ops-surface-raised ${cfg.accent}`}`}
+              className={`mt-px flex-none rounded border px-1.5 py-0.5 text-[9px] font-bold tracking-[0.15em] uppercase ${getBadgeClasses(badge, Boolean(node.isError))}`}
             >
-              {node.badge ?? cfg.badge}
+              {badge}
             </span>
           )}
           <span
-            className={`font-medium text-sm leading-tight ${node.isError ? 'text-[var(--color-error)]' : 'text-[var(--color-text-primary)]'}`}
+            className={`min-w-0 truncate font-medium text-sm leading-tight ${node.isError ? 'text-[var(--color-error)]' : 'text-[var(--color-text-primary)]'}`}
+            title={node.label}
           >
             {node.label}
           </span>
-          {node.detail && (
-            <span
-              className="flex-1 truncate text-xs text-[var(--color-text-tertiary)] mt-0.5"
-              title={node.detail}
-            >
-              {node.detail.length > 80
-                ? `${node.detail.slice(0, 80)}…`
-                : node.detail}
-            </span>
-          )}
-          {node.meta && (
-            <div className="hidden group-hover:flex items-center gap-1">
-              {Object.entries(node.meta).map(([k, v]) => (
-                <span
-                  key={k}
-                  className="rounded bg-ops-surface-raised px-1.5 py-0.5 text-[9px] text-[var(--color-text-tertiary)] font-mono"
-                >
-                  {k}: {v.length > 16 ? `${v.slice(0, 8)}…` : v}
-                </span>
-              ))}
-            </div>
-          )}
-          <span className="flex-none text-[10px] text-[var(--color-text-tertiary)] tabular-nums mt-0.5 ml-auto pl-2">
+          <span className="ml-auto mt-0.5 hidden flex-none pl-2 text-[10px] tabular-nums text-[var(--color-text-tertiary)] sm:inline">
             {fmtTime(node.timestamp)}
           </span>
-          {Boolean(node.raw) && (
-            <button
-              className="flex-none text-[9px] text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)] transition-colors mt-0.5"
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowRaw(!showRaw);
-              }}
-              title="Toggle raw data"
+          {isExpandable && (
+            <span
+              className={`mt-0.5 flex h-3 w-3 flex-none items-center justify-center ${iconAccent}`}
             >
-              {'{ }'}
-            </button>
+              <ExpandIcon aria-hidden="true" size={13} strokeWidth={1.8} />
+            </span>
           )}
         </div>
 
         {/* Body */}
-        {node.body &&
-          (open ||
-            showBody ||
-            node.kind === 'result' ||
-            node.kind === 'error') && (
-            <div
-              className={`ml-5 mt-1 mb-2 rounded-btn border ${cfg.border} bg-ops-bg overflow-hidden`}
-            >
-              <pre className="p-3 text-[13px] leading-relaxed text-[var(--color-text-secondary)] whitespace-pre-wrap break-words font-[inherit] max-h-[400px] overflow-auto">
-                {node.body}
-              </pre>
-            </div>
-          )}
-
-        {/* Raw JSON */}
-        {showRaw && Boolean(node.raw) && (
-          <div className="ml-5 mt-1 mb-2 rounded-btn border border-ops-border-subtle bg-ops-bg overflow-hidden">
-            <pre className="p-3 text-[11px] leading-relaxed text-[var(--color-text-tertiary)] whitespace-pre-wrap break-words max-h-[300px] overflow-auto font-mono">
-              {JSON.stringify(node.raw, null, 2)}
-            </pre>
+        {node.body && open && (
+          <div
+            className={`ml-5 mt-1 mb-2 rounded-btn border ${regularBorder} bg-ops-bg overflow-hidden`}
+          >
+            <TraceBody body={node.body} />
           </div>
         )}
 
         {/* Children */}
         {open && hasChildren && (
-          <div className="mt-1 space-y-1">
+          <div
+            className={`relative mt-1 space-y-1 ${node.children.length > 1 ? 'before:absolute before:top-[14px] before:bottom-[14px] before:left-[11px] before:w-px before:bg-ops-border' : ''}`}
+          >
             {node.children.map((child) => (
               <TraceNodeView
                 key={child.id}
@@ -1056,14 +1372,12 @@ function TokenStat({
   total,
   input,
   output,
-  estimated,
 }: {
   total: number | string;
   input?: string;
   output?: string;
-  estimated?: boolean;
 }) {
-  const hasTooltip = Boolean((input && output) || estimated);
+  const hasTooltip = true;
   const totalDisplay = formatCompactTokenTotal(total);
 
   return (
@@ -1073,12 +1387,12 @@ function TokenStat({
           {totalDisplay}
         </span>
         <span className="text-[10px] uppercase tracking-[0.2em] text-[var(--color-text-tertiary)]">
-          Tokens
+          Usage
         </span>
       </div>
 
       {hasTooltip && (
-        <div className="pointer-events-none absolute left-0 top-full z-20 mt-2 w-max min-w-[180px] rounded-btn border border-ops-border bg-ops-surface-raised px-3 py-2 opacity-0 shadow-card-hover transition-opacity duration-150 group-hover:opacity-100">
+        <div className="pointer-events-none absolute right-0 top-full z-20 mt-2 w-max min-w-[180px] max-w-[calc(100vw-2rem)] rounded-btn border border-ops-border bg-ops-surface-raised px-3 py-2 opacity-0 shadow-card-hover transition-opacity duration-150 group-hover:opacity-100">
           {input && output ? (
             <>
               <div className="flex items-baseline gap-2 text-xs">
@@ -1100,9 +1414,13 @@ function TokenStat({
             </>
           ) : (
             <div className="text-xs font-medium uppercase tracking-[0.14em] text-[var(--color-text-tertiary)]">
-              Estimated total only
+              Observed total only
             </div>
           )}
+          <p className="mt-2 max-w-[240px] text-[10px] leading-relaxed text-[var(--color-text-tertiary)]">
+            Cumulative observed token usage across the coordinator and
+            subagents. This is not context-window occupancy.
+          </p>
         </div>
       )}
     </div>
@@ -1171,6 +1489,7 @@ export default function SessionDetailPage() {
   const [loading, setLoading] = useState(true);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [viewMode, setViewMode] = useState<'tree' | 'raw'>('tree');
+  const [showThinking, setShowThinking] = useState(false);
   const [rerunning, setRerunning] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -1236,8 +1555,10 @@ export default function SessionDetailPage() {
   }, [taskId, autoRefresh]);
 
   const promptForTree = taskRecord?.prompt ?? session?.task?.prompt;
-  const { root, stats, heartbeats, skillsUsed, mcpsUsed } =
-    useMemo(() => buildTree(events, promptForTree), [events, promptForTree]);
+  const { root, stats, heartbeats, skillsUsed, mcpsUsed } = useMemo(
+    () => buildTree(events, promptForTree, showThinking),
+    [events, promptForTree, showThinking],
+  );
   const [forceOpen, setForceOpen] = useState<boolean | null>(null);
 
   if (loading)
@@ -1455,9 +1776,8 @@ export default function SessionDetailPage() {
 
   const finalTokenTotal =
     sessionDetail.tokens_input + sessionDetail.tokens_output;
-  const totalTokens = finalTokenTotal || task.tokens_used;
+  const totalTokens = Math.max(finalTokenTotal, task.tokens_used);
   const hasFinalTokenTotals = finalTokenTotal > 0;
-  const hasEstimatedTokens = !hasFinalTokenTotals && task.tokens_used > 0;
   const inputTokensDisplay = hasFinalTokenTotals
     ? sessionDetail.tokens_input.toLocaleString()
     : '-';
@@ -1568,31 +1888,43 @@ export default function SessionDetailPage() {
           <StatPill
             label="Subagents"
             value={stats.subagentSpawns}
-            accent="text-[#A78BCA]"
+            accent="text-[#A65A7A]"
           />
           <StatPill label="Heartbeats" value={heartbeats.length} />
           <TokenStat
             total={totalTokensDisplay}
             input={hasFinalTokenTotals ? inputTokensDisplay : undefined}
             output={hasFinalTokenTotals ? outputTokensDisplay : undefined}
-            estimated={hasEstimatedTokens}
           />
         </div>
       </header>
 
       {/* ── Main ── */}
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_280px]">
-        <section className="rounded-card border border-ops-border bg-ops-surface p-4">
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
+        <section className="min-w-0 rounded-card border border-ops-border bg-ops-surface p-4">
+          <div className="mb-4 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
+            <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-lg font-medium text-[var(--color-text-primary)]">
-                Trace
+                {root.label}
               </h2>
-              <span className="text-xs text-[var(--color-text-tertiary)]">
-                {root.children.length} top-level
-              </span>
+              {root.label !== 'Trace' && (
+                <span
+                  className={`rounded border px-1.5 py-0.5 text-[9px] font-bold tracking-[0.15em] uppercase ${getBadgeClasses('AGENT', false)}`}
+                >
+                  Agent
+                </span>
+              )}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="flex items-center gap-1.5 rounded-btn border border-ops-border bg-ops-surface px-2 py-1 text-[10px] text-[var(--color-text-tertiary)] select-none cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showThinking}
+                  onChange={(e) => setShowThinking(e.target.checked)}
+                  className="rounded border-ops-border bg-transparent accent-[var(--color-accent)]"
+                />
+                Reasoning
+              </label>
               <div className="flex rounded-btn border border-ops-border bg-ops-surface text-[10px]">
                 <button
                   onClick={() => setForceOpen(true)}
@@ -1605,12 +1937,6 @@ export default function SessionDetailPage() {
                   className="px-2 py-1 text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] transition-colors border-l border-ops-border"
                 >
                   Collapse
-                </button>
-                <button
-                  onClick={() => setForceOpen(null)}
-                  className="px-2 py-1 text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] transition-colors border-l border-ops-border"
-                >
-                  Auto
                 </button>
               </div>
               <div className="flex rounded-btn border border-ops-border bg-ops-surface p-0.5 text-xs">
@@ -1654,7 +1980,7 @@ export default function SessionDetailPage() {
         </section>
 
         {/* Sidebar */}
-        <aside className="space-y-4">
+        <aside className="min-w-0 space-y-4">
           <section className="rounded-card border border-ops-border bg-ops-surface p-4">
             <h3 className="text-sm font-medium text-[var(--color-text-secondary)] mb-3">
               Runtime
@@ -1674,23 +2000,6 @@ export default function SessionDetailPage() {
               />
               <MiniStat label="Events" value={events.length} />
             </div>
-            {hasEstimatedTokens && (
-              <p className="mt-3 text-[11px] leading-relaxed text-[var(--color-text-tertiary)]">
-                Showing the last known token count from `task_progress` events.
-                Final totals were not written because the session did not reach
-                `session_complete`.
-              </p>
-            )}
-            {!hasEstimatedTokens &&
-              totalTokens === 0 &&
-              (task.status === 'lost' ||
-                sessionDetail.status === 'running') && (
-                <p className="mt-3 text-[11px] leading-relaxed text-[var(--color-text-tertiary)]">
-                  Final token totals are only persisted on `session_complete`.
-                  This task ended without a final result, so token totals are
-                  unavailable from current telemetry.
-                </p>
-              )}
           </section>
 
           {sessionDetail.subagents_used &&
@@ -1703,9 +2012,9 @@ export default function SessionDetailPage() {
                   {sessionDetail.subagents_used.map((sa) => (
                     <div
                       key={sa.name}
-                      className="flex items-center justify-between rounded-btn border border-[#A78BCA]/15 bg-[#A78BCA]/5 px-3 py-2"
+                      className="flex items-center justify-between rounded-btn border border-[#A65A7A]/15 bg-[#A65A7A]/5 px-3 py-2"
                     >
-                      <span className="text-xs font-medium text-[#A78BCA]">
+                      <span className="text-xs font-medium text-[#A65A7A]">
                         {sa.name}
                       </span>
                       <span className="text-[10px] text-[var(--color-text-tertiary)]">
@@ -1822,9 +2131,10 @@ export default function SessionDetailPage() {
             <h3 className="text-sm font-medium text-[var(--color-text-secondary)] mb-3">
               Task Metadata
             </h3>
-            <pre className="text-[10px] text-[var(--color-text-tertiary)] whitespace-pre-wrap break-words max-h-48 overflow-auto font-mono leading-relaxed">
-              {JSON.stringify(task.metadata, null, 2)}
-            </pre>
+            <JsonCode
+              body={JSON.stringify(task.metadata ?? {}, null, 2)}
+              compact
+            />
           </section>
         </aside>
       </div>

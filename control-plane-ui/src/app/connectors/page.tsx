@@ -34,11 +34,8 @@ export default function ConnectorsPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-[11px] uppercase tracking-[0.2em] text-[var(--color-text-tertiary)]">
+          <h1 className="font-display text-4xl font-normal leading-[1.1] tracking-tight text-[var(--color-text-primary)]">
             Connectors
-          </p>
-          <h1 className="mt-2 font-display text-4xl font-normal leading-[1.1] tracking-tight text-[var(--color-text-primary)]">
-            Ingestion surfaces
           </h1>
         </div>
         <button

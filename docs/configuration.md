@@ -83,6 +83,7 @@ workflow bundles and agent-memory backups across supported deployment targets.
 | `RUNTIME_LAUNCHER` | `docker` | `docker` or `kubernetes`. |
 | `MEMORY_SYNC_MODE` | `docker_volume` | `docker_volume` for Compose or `filesystem` for a mounted memory path. Kubernetes Jobs use task-local `/memory` plus object-store restore/upload. |
 | `MEMORY_FILESYSTEM_ROOT` | `/memory` | Container path agent memory volumes mount at. |
+| `CLAUDE_CODE_THINKING_MODE` | `default` | `default`/`on` leaves provider thinking behavior unchanged; `off`/`disabled` passes Claude Code's explicit thinking-disable switch. Provider support varies. |
 | `KUBERNETES_MEMORY_HELPER_IMAGE` | `""` | Image containing `session_manager.memory_sync`; Helm defaults it to the session-manager image. |
 | `KUBERNETES_BOOTSTRAP_SECRET` | `""` | Bootstrap Secret name referenced by Kubernetes memory helper Jobs for object-store credentials. Helm sets it from `bootstrap.existingSecret`. |
 | `KUBERNETES_NAMESPACE` | `default` | Kubernetes launcher namespace. |
@@ -213,6 +214,11 @@ model_profiles:      # named env-var bundles selected via agent.yaml session.mod
     ANTHROPIC_BASE_URL: http://local-llm:8000
     ANTHROPIC_AUTH_TOKEN: ${LLM_API_KEY}
     ANTHROPIC_MODEL: some-model-name
+    CLAUDE_CODE_THINKING_MODE: default
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: "8192"
+    CLAUDE_CODE_MAX_CONTEXT_TOKENS: "65536"
+    CLAUDE_CODE_AUTO_COMPACT_WINDOW: "65536"
+    CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "90"
 
 memory:
   backend: hindsight
@@ -230,6 +236,12 @@ secrets:              # age-encrypted platform-wide secrets
 `${VAR}` placeholders anywhere in this file are expanded from `config:`
 values, decrypted `secrets:` values, and the process environment at load time
 (`shared/lib/platform_secrets.py::expand_env_placeholders`).
+
+`MAX_THINKING_TOKENS` is a provider-specific legacy budget and is not a portable
+reasoning control. Thinking mode, reasoning-history handling, and sampling
+controls such as temperature, top-p, top-k, and presence penalty belong in the
+model gateway or inference deployment when the Anthropic-compatible client does
+not expose them as workflow settings.
 
 ### Encrypted secrets
 

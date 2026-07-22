@@ -14,12 +14,44 @@ from sqlalchemy import case, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.lib.models import Approval, Session, SessionEvent, Task, TaskEvent
+from shared.lib.workflow_paths import find_workflow_package
 
 logger = logging.getLogger(__name__)
 
 RUNNABLE_STATUSES = ("resume_pending", "queued")
 WAITING_STATUSES = ("waiting_approval", "waiting_user_input")
 TERMINAL_STATUSES = ("succeeded", "failed", "lost", "timed_out")
+
+
+def _workflow_default_message_channel(workflow: str) -> str:
+    """Return the first declared workflow channel, if the package is available."""
+    package = find_workflow_package(workflow)
+    config = package.config if package else {}
+    messaging = config.get("messaging") if isinstance(config, dict) else None
+    channels = messaging.get("channels") if isinstance(messaging, dict) else None
+    if not isinstance(channels, list):
+        return ""
+    return next((str(channel).strip() for channel in channels if str(channel).strip()), "")
+
+
+def _normalize_message_route(
+    workflow: str,
+    message_channel: str | None,
+    message_thread: str | None,
+    metadata: dict | None,
+) -> tuple[str | None, dict]:
+    """Use the workflow channel unless an incoming message thread owns the reply route."""
+    normalized_metadata = dict(metadata or {})
+    if message_thread:
+        return message_channel, normalized_metadata
+
+    workflow_channel = _workflow_default_message_channel(workflow)
+    if not workflow_channel or workflow_channel == message_channel:
+        return message_channel, normalized_metadata
+
+    for key in ("channel_id", "team_id", "team_name", "team_domain"):
+        normalized_metadata.pop(key, None)
+    return workflow_channel, normalized_metadata
 
 
 async def create_task(
@@ -39,6 +71,8 @@ async def create_task(
     If coalesce_key is provided, checks for recent queued/running tasks with the
     same key. If found within the window, appends to the existing task instead.
     """
+    message_channel, metadata = _normalize_message_route(workflow, message_channel, message_thread, metadata)
+
     if coalesce_key:
         cutoff = datetime.now(UTC) - timedelta(seconds=coalesce_window_sec)
         existing = await session.execute(

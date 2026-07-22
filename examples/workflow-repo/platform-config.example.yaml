@@ -48,9 +48,20 @@ connectors:
   #       type: pubsub
   #       project: ${GCP_PROJECT}
   #       subscription: ${GCP_PUBSUB_SUBSCRIPTION}
+  #       gcs_payload:                    # optional GCS object referenced by the Pub/Sub message
+  #         enabled: true
+  #         bucket_field: bucket
+  #         name_field: name
+  #         metadata_key: email_text
+  #         max_bytes: 200000
+  #         parser: email                 # `text` (default) or RFC 822/MIME email parsing
+  #         max_body_chars: 4000          # `email` only: text/plain preferred, HTML fallback
   #     target:
   #       workflow: example-workflow
-  #       message_channel: ops-alerts
+  #     parsing:
+  #       email_extract:                  # optional regexes over parsed headers and body
+  #         incident_id: "Incident: ([A-Z0-9-]+)"
+  #         description: body
 
 message_bus:
   # Supported providers: mattermost, slack.
@@ -72,6 +83,7 @@ runtime_env:
   DISABLE_FEEDBACK_COMMAND: true
   CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: true
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: true
+  CLAUDE_CODE_DISABLE_TERMINAL_TITLE: true
 
 # If a workflow omits session.model, this profile is used automatically.
 default_model_profile: example
@@ -90,6 +102,11 @@ model_profiles:
     ANTHROPIC_DEFAULT_SONNET_MODEL: example-model
     ANTHROPIC_DEFAULT_HAIKU_MODEL: example-model
     CLAUDE_CODE_SUBAGENT_MODEL: example-model
+    CLAUDE_CODE_THINKING_MODE: default
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: "8192"
+    CLAUDE_CODE_MAX_CONTEXT_TOKENS: "65536"
+    CLAUDE_CODE_AUTO_COMPACT_WINDOW: "65536"
+    CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "90"
 
 memory:
   backend: hindsight

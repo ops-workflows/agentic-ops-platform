@@ -1625,10 +1625,13 @@ async def get_workflow_repo_status():
 
 @router.post("/platform/workflow-repo/sync", response_model=WorkflowRepoResponse)
 async def trigger_workflow_repo_sync():
+    from gateway.provisioner import run_provisioner_scan
     from shared.lib.workflow_repo_sync import sync_workflow_repo
 
     async with async_session_factory() as session:
-        await sync_workflow_repo(session)
+        result = await sync_workflow_repo(session)
+    if result.status == "ok":
+        await run_provisioner_scan()
     return await get_workflow_repo_status()
 
 

@@ -5,12 +5,11 @@ import { useState } from 'react';
 import { useTheme } from '@/components/theme-provider';
 
 const NAV_ITEMS = [
-  { href: '/agents', label: 'Agents' },
+  { href: '/workflows', label: 'Workflows' },
   { href: '/tasks', label: 'Tasks' },
   { href: '/schedules', label: 'Schedules' },
   { href: '/mcp', label: 'MCP' },
   { href: '/connectors', label: 'Connectors' },
-  { href: '/workflow-repo', label: 'Workflow Repo' },
   { href: '/approvals', label: 'Approvals' },
   { href: '/memory', label: 'Memory' },
   { href: '/analytics', label: 'Analytics' },

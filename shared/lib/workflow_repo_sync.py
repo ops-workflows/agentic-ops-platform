@@ -111,6 +111,10 @@ def _platform_config_source_path() -> Path:
     return Path(settings.platform_config_file or settings.platform_secrets_file).expanduser()
 
 
+def _platform_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
 def _publish_platform_config_snapshot(bundle_root: Path) -> Path:
     """Atomically publish the synced repo config used for new task launches."""
     source = _platform_config_source_path()
@@ -206,7 +210,7 @@ async def _run_sync_pipeline(effective_ref: str | None) -> WorkflowSyncResult:
         packages = discover_workflow_packages()
         discovered = sorted(pkg.name for pkg in packages)
 
-        platform_root = Path(__file__).resolve().parents[1]
+        platform_root = _platform_root()
         running_version = platform_version_for_root(platform_root)
         commit = git_commit_for_path(Path(settings.workflow_repo_local_path).expanduser())
 
@@ -216,9 +220,7 @@ async def _run_sync_pipeline(effective_ref: str | None) -> WorkflowSyncResult:
         bucket = settings.runtime_bundle_object_store_bucket.strip()
         if bundle_root or bucket:
             output_dir = (
-                Path(bundle_root).expanduser()
-                if bundle_root
-                else Path(tempfile.mkdtemp(prefix="workflow-release-"))
+                Path(bundle_root).expanduser() if bundle_root else Path(tempfile.mkdtemp(prefix="workflow-release-"))
             )
             release_id = _release_id(commit=commit, effective_ref=effective_ref)
             release_bundles: dict[str, dict[str, str]] = {}

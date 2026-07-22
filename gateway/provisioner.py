@@ -86,6 +86,7 @@ async def run_provisioner_scan() -> None:
                         existing.provisioned = True
                         existing.provisioned_at = existing.provisioned_at or datetime.now(UTC)
                         await session.commit()
+                    await _sync_schedules(session, name, config.get("schedules", []))
                     logger.info("Agent '%s' unchanged, skipping", name)
                     continue
 

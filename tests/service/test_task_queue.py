@@ -42,6 +42,25 @@ async def test_create_task_persists_metadata_and_emits_event(db_session) -> None
 
 
 @pytest.mark.asyncio
+async def test_threadless_task_uses_workflow_default_message_channel(db_session, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "shared.lib.task_queue._workflow_default_message_channel",
+        lambda _workflow: "workflow-default",
+    )
+
+    task = await create_task(
+        db_session,
+        workflow="platform-test",
+        prompt="connector alert",
+        metadata={"source": "connector", "channel_id": "source-channel-id", "team_id": "source-team"},
+        message_channel="source-channel",
+    )
+
+    assert task.message_channel == "workflow-default"
+    assert task.task_metadata == {"source": "connector"}
+
+
+@pytest.mark.asyncio
 async def test_dequeue_task_marks_running_and_sets_heartbeat(db_session) -> None:
     await create_task(db_session, workflow="platform-test", prompt="p")
     task = await dequeue_task(db_session, workflow="platform-test")

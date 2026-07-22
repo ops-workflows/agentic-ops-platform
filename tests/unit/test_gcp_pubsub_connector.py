@@ -82,3 +82,76 @@ def test_subscriber_callback_uses_connector_event_loop(monkeypatch):
     assert captured["payload"] == {"event_id": "event-1"}
     assert message.acked is True
     assert message.nacked is False
+
+
+def test_parse_gcs_email_prefers_plain_text_and_extracts_headers():
+    raw = b"""From: Salesforce <info@salesforce.com>
+To: alerts@example.com
+Subject: Flow failure
+Date: Fri, 17 Jul 2026 04:14:10 +0000
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary=part
+
+--part
+Content-Type: text/plain; charset=utf-8
+
+Plain failure details.
+--part
+Content-Type: text/html; charset=utf-8
+
+<p>HTML failure details.</p>
+--part--
+"""
+
+    parsed = main._parse_gcs_email(raw, "alert_email_text", 4_000)
+
+    assert parsed["email_subject"] == "Flow failure"
+    assert parsed["email_sender"] == "Salesforce <info@salesforce.com>"
+    assert parsed["email_recipient"] == "alerts@example.com"
+    assert parsed["alert_email_text"] == "Plain failure details."
+    assert parsed["email_body_text"] == "Plain failure details."
+
+
+def test_parse_gcs_email_converts_html_when_plain_text_is_absent():
+    raw = b"""Subject: HTML-only alert
+Content-Type: text/html; charset=utf-8
+
+<h1>Flow error</h1><p>Record <strong>001</strong> failed.</p>
+"""
+
+    parsed = main._parse_gcs_email(raw, "email_text", 4_000)
+
+    assert parsed["email_text"] == "Flow error Record 001 failed."
+
+
+def test_extract_email_metadata_uses_deployment_regexes():
+    metadata = {
+        "email_subject": "Developer script exception from SubscriptionTrigger",
+        "email_sender": "ApexApplication <info@salesforce.com>",
+        "email_body_text": "Failure for record a2IVc000000lHS1MAM: FIELD_CUSTOM_VALIDATION_EXCEPTION",
+    }
+    config = {
+        "parsing": {
+            "email_extract": {
+                "apex_class": "Developer script exception from ([^:\\n]+)",
+                "error_type": "(FIELD_CUSTOM_VALIDATION_EXCEPTION)",
+                "record_ids": "\\b([a-zA-Z0-9]{18})\\b",
+                "description": "body",
+            }
+        }
+    }
+
+    extracted = main._extract_email_metadata(metadata, config)
+
+    assert extracted == {
+        "apex_class": "SubscriptionTrigger",
+        "error_type": "FIELD_CUSTOM_VALIDATION_EXCEPTION",
+        "record_ids": "a2IVc000000lHS1MAM",
+        "description": metadata["email_body_text"],
+    }
+
+
+def test_render_prompt_omits_missing_parsed_values():
+    rendered = main._render_prompt("Flow: {flow_name}\nApex: {apex_class}", {"flow_name": None})
+
+    assert rendered == "Flow: \nApex: "

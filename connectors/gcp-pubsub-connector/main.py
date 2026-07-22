@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import email
 import json
 import logging
 import os
+import re
 import signal
 import tempfile
 from collections import UserDict
+from email import policy
+from email.message import Message
+from html import unescape
 from typing import Any
 
 from shared.lib.platform_secrets import (
@@ -114,6 +119,77 @@ def _extract_metadata(payload: dict[str, Any], config: dict[str, Any]) -> dict[s
     return metadata
 
 
+def _trim_text(value: str, limit: int) -> str:
+    text = " ".join(value.split())
+    return text if len(text) <= limit else f"{text[: limit - 3]}..."
+
+
+def _html_to_text(value: str, limit: int) -> str:
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        text = re.sub(r"<[^>]+>", " ", value)
+        return _trim_text(unescape(text), limit)
+    return _trim_text(BeautifulSoup(value, "html.parser").get_text("\n", strip=True), limit)
+
+
+def _email_body_text(message: Message, limit: int) -> str:
+    html_body = ""
+    for part in message.walk() if message.is_multipart() else [message]:
+        if part.get_content_disposition() == "attachment":
+            continue
+        content_type = part.get_content_type()
+        if content_type not in {"text/plain", "text/html"}:
+            continue
+        try:
+            content = str(part.get_content())
+        except (LookupError, UnicodeDecodeError):
+            continue
+        if content_type == "text/plain" and content.strip():
+            return _trim_text(content, limit)
+        if content_type == "text/html" and not html_body:
+            html_body = content
+    return _html_to_text(html_body, limit) if html_body else ""
+
+
+def _parse_gcs_email(raw: bytes, metadata_key: str, max_body_chars: int) -> dict[str, Any]:
+    """Extract RFC 822 headers and a readable MIME body from a GCS object."""
+    message = email.message_from_bytes(raw, policy=policy.default)
+    body_text = _email_body_text(message, max_body_chars)
+    return {
+        metadata_key: body_text,
+        "email_subject": str(message.get("Subject", "")),
+        "email_sender": str(message.get("From", "")),
+        "email_recipient": str(message.get("To", "")),
+        "email_date": str(message.get("Date", "")),
+        "email_body_text": body_text,
+    }
+
+
+def _extract_email_metadata(metadata: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    """Apply optional deployment-provided regexes to parsed email headers and body."""
+    parsing = config.get("parsing") if isinstance(config.get("parsing"), dict) else {}
+    extract_config = parsing.get("email_extract") if isinstance(parsing.get("email_extract"), dict) else {}
+    search_text = "\n".join(
+        (
+            f"Subject: {metadata.get('email_subject', '')}",
+            f"From: {metadata.get('email_sender', '')}",
+            f"To: {metadata.get('email_recipient', '')}",
+            f"Date: {metadata.get('email_date', '')}",
+            "",
+            str(metadata.get("email_body_text", "")),
+        )
+    )
+    extracted: dict[str, Any] = {}
+    for field, pattern in extract_config.items():
+        if pattern == "body":
+            extracted[str(field)] = metadata.get("email_body_text", "")
+            continue
+        match = re.search(str(pattern), search_text, re.IGNORECASE | re.MULTILINE)
+        extracted[str(field)] = match.group(1) if match else None
+    return extracted
+
+
 def _fetch_gcs_payload(payload: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     gcs_config = config.get("source", {}).get("gcs_payload") or {}
     if not isinstance(gcs_config, dict) or not gcs_config.get("enabled"):
@@ -129,13 +205,27 @@ def _fetch_gcs_payload(payload: dict[str, Any], config: dict[str, Any]) -> dict[
     max_bytes = int(gcs_config.get("max_bytes") or 200_000)
     client = storage.Client()
     blob = client.bucket(str(bucket_name)).blob(str(object_name))
-    content = blob.download_as_bytes(start=0, end=max_bytes - 1).decode("utf-8", errors="replace")
+    raw = blob.download_as_bytes(start=0, end=max_bytes - 1)
     key = str(gcs_config.get("metadata_key") or "object_text")
-    return {key: content, "gcs_bucket": str(bucket_name), "gcs_object": str(object_name)}
+    parser = str(gcs_config.get("parser") or "text").lower()
+    if parser == "email":
+        content = _parse_gcs_email(raw, key, int(gcs_config.get("max_body_chars") or 4_000))
+    elif parser == "text":
+        content = {key: raw.decode("utf-8", errors="replace")}
+    else:
+        raise ValueError(f"Unsupported gcs_payload parser: {parser}")
+    return {
+        **content,
+        "gcs_bucket": str(bucket_name),
+        "gcs_object": str(object_name),
+        "gcs_uri": f"gs://{bucket_name}/{object_name}",
+    }
 
 
 def _render_prompt(template: str, values: dict[str, Any]) -> str:
-    return template.format_map(_SafeFormatMap({key: str(value) for key, value in values.items()}))
+    return template.format_map(
+        _SafeFormatMap({key: "" if value is None else str(value) for key, value in values.items()})
+    )
 
 
 async def _create_task(
@@ -151,6 +241,7 @@ async def _create_task(
     coalescing = config.get("coalescing", {}) if isinstance(config.get("coalescing"), dict) else {}
     metadata = _extract_metadata(payload, config)
     metadata.update(_fetch_gcs_payload(payload, config))
+    metadata.update(_extract_email_metadata(metadata, config))
     metadata.update(
         {
             "source": "gcp-pubsub-connector",
@@ -175,7 +266,6 @@ async def _create_task(
             prompt=prompt,
             channel=str(target.get("channel") or "gcp-pubsub"),
             metadata=metadata,
-            message_channel=str(target.get("message_channel") or "") or None,
             coalesce_key=coalesce_key,
             coalesce_window_sec=int(coalescing.get("window_sec") or 300),
         )

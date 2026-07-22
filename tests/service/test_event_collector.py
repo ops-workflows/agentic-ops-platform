@@ -197,6 +197,25 @@ async def test_conversation_batch_updates_tokens(db_session) -> None:
     await db_session.refresh(refreshed)
     assert refreshed.tokens_used == 77
 
+    await receive_event(
+        EventPayload(
+            task_id=str(task.id),
+            event_type="conversation_batch",
+            timestamp=_ts(),
+            data={
+                "messages": [
+                    {
+                        "type": "system",
+                        "subtype": "task_progress",
+                        "data": {"usage": {"total_tokens": 0}},
+                    }
+                ]
+            },
+        )
+    )
+    await db_session.refresh(refreshed)
+    assert refreshed.tokens_used == 77
+
 
 @pytest.mark.asyncio
 async def test_event_with_empty_task_id_is_safe(db_session) -> None:

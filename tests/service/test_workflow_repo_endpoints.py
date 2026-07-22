@@ -6,9 +6,9 @@ from pathlib import Path
 
 import httpx
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
-from shared.lib.models import WorkflowRepoState
+from shared.lib.models import Agent, WorkflowRepoState
 
 pytestmark = pytest.mark.service
 
@@ -53,7 +53,7 @@ async def test_workflow_repo_status_returns_local_source_mode_by_default(
 
 @pytest.mark.asyncio
 async def test_workflow_repo_sync_discovers_and_persists_state(
-    async_engine, fixture_workflows_dir: Path, monkeypatch
+    async_engine, db_session, fixture_workflows_dir: Path, monkeypatch
 ) -> None:
     from shared.lib.config import settings
 
@@ -68,6 +68,11 @@ async def test_workflow_repo_sync_discovers_and_persists_state(
 
         status_resp = await client.get("/api/platform/workflow-repo")
         assert status_resp.json()["last_sync_status"] == "ok"
+
+    result = await db_session.execute(select(Agent).where(Agent.name == "platform-test"))
+    agent = result.scalar_one()
+    assert agent.provisioned is True
+    assert agent.config["runtime"]["parallel_workers"] == 1
 
 
 @pytest.mark.asyncio

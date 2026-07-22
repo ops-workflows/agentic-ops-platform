@@ -44,16 +44,9 @@ export default function SchedulesPage() {
       <section className="space-y-4 pt-4">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div className="space-y-3">
-            <p className="text-[11px] uppercase tracking-[0.22em] text-[var(--color-text-tertiary)]">
-              Schedules
-            </p>
             <h1 className="font-display text-4xl font-normal leading-[1.15] tracking-tight text-[var(--color-text-primary)]">
-              Cron-driven workflows, without the blind spots.
+              Schedules
             </h1>
-            <p className="max-w-2xl text-base leading-7 text-[var(--color-text-secondary)]">
-              See which agents run on a cadence, what prompt they use, and when
-              they are due next.
-            </p>
           </div>
         </div>
       </section>
@@ -80,7 +73,8 @@ export default function SchedulesPage() {
             No schedules configured
           </p>
           <p className="text-sm text-[var(--color-text-tertiary)]">
-            Add a schedules section to your agent.yaml to define cron jobs.
+            Add a schedules section to a workflow's agent.yaml to define cron
+            jobs.
           </p>
         </div>
       ) : (

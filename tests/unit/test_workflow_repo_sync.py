@@ -5,6 +5,7 @@ bundle/platform compatibility policy.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -57,6 +58,16 @@ def test_bundle_major_older_than_platform_is_a_warning():
 def test_unparseable_versions_are_treated_as_ok():
     assert check_bundle_compatibility("unknown", "1.0.0") == COMPATIBILITY_OK
     assert check_bundle_compatibility("1.0.0", "unknown") == COMPATIBILITY_OK
+
+
+def test_sync_platform_root_contains_shared_runtime_assets():
+    from shared.lib import workflow_repo_sync as sync_mod
+
+    platform_root = sync_mod._platform_root()
+
+    assert platform_root == Path(sync_mod.__file__).resolve().parents[2]
+    assert (platform_root / "skills" / "large-result-handling" / "SKILL.md").is_file()
+    assert (platform_root / "hooks" / "auto_recall_hook.py").is_file()
 
 
 def test_publish_platform_config_snapshot_uses_local_repo_config(monkeypatch, tmp_path):

@@ -9,6 +9,7 @@ pytestmark = pytest.mark.unit
 from gateway.event_collector import (  # noqa: E402
     _coerce_total_tokens,
     _extract_incremental_tokens,
+    _monotonic_token_total,
 )
 
 
@@ -45,6 +46,22 @@ def test_extract_incremental_tokens_from_task_progress() -> None:
     assert _extract_incremental_tokens(event_data) == 123
 
 
+def test_extract_incremental_tokens_prefers_workflow_aggregate() -> None:
+    event_data = {
+        "messages": [
+            {
+                "type": "system",
+                "subtype": "task_progress",
+                "data": {
+                    "usage": {"total_tokens": 123},
+                    "workflow_usage": {"total_tokens": 456, "agent_count": 2},
+                },
+            }
+        ]
+    }
+    assert _extract_incremental_tokens(event_data) == 456
+
+
 def test_extract_incremental_tokens_prefers_later_result() -> None:
     event_data = {
         "messages": [
@@ -58,3 +75,9 @@ def test_extract_incremental_tokens_prefers_later_result() -> None:
 def test_extract_incremental_tokens_none_when_missing() -> None:
     assert _extract_incremental_tokens({}) is None
     assert _extract_incremental_tokens({"messages": "not-a-list"}) is None
+
+
+def test_monotonic_token_total_does_not_regress() -> None:
+    assert _monotonic_token_total(77, 0) == 77
+    assert _monotonic_token_total(77, 100) == 100
+    assert _monotonic_token_total(None, 10) == 10

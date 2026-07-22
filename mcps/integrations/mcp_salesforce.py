@@ -846,7 +846,12 @@ def get_record(
     ],
     headers: dict[str, str] = CurrentHeaders(),
 ) -> dict[str, Any]:
-    """Fetch the current state of one live record by Salesforce ID."""
+    """Fetch the current state of one live record by Salesforce ID.
+
+    Use this only when the alert already provides a concrete record ID. For setup
+    metadata such as validation rules, field definitions, object definitions, or
+    flow definitions, use ``query_tooling_records`` instead.
+    """
     valid_id = _validate_id(record_id)
     if not valid_id:
         return {"error": "Invalid Salesforce record ID format (must be 15 or 18 alphanumeric characters)"}
@@ -907,7 +912,12 @@ def query_records(
     limit: Annotated[int, "Maximum number of records to return. Server capped at 200."] = 50,
     headers: dict[str, str] = CurrentHeaders(),
 ) -> dict[str, Any]:
-    """Query allowlisted live or standard objects with structured filters; raw SOQL is not accepted."""
+    """Query allowlisted live or standard objects with structured filters.
+
+    Raw SOQL is not accepted. Use this for live records and exact Apex class or
+    trigger lookups with a small field set. Use ``query_tooling_records`` for
+    setup metadata such as validation rules, field definitions, and flow metadata.
+    """
     if object_type not in ALLOWED_OBJECTS:
         return _allowed_object_error(object_type, tool_name="query_records")
     if not fields:
@@ -1023,7 +1033,12 @@ def query_tooling_records(
     limit: Annotated[int, "Maximum number of records to return. Server capped at 200."] = 25,
     headers: dict[str, str] = CurrentHeaders(),
 ) -> dict[str, Any]:
-    """Query allowlisted Tooling API metadata for schema and automation inspection."""
+    """Query allowlisted Tooling API metadata for schema and automation inspection.
+
+    Use this for setup metadata not reliably available through the standard query
+    path, including validation rules, field definitions, object definitions, flow
+    metadata, and workflow rules. Use live-record tools for business records.
+    """
     if object_type not in ALLOWED_TOOLING_OBJECTS:
         return _allowed_object_error(
             object_type,

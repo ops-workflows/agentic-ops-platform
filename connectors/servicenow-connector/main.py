@@ -148,7 +148,6 @@ async def _create_task_from_incident(parsed: dict, config: dict) -> None:
                 "description": parsed.get("description"),
                 "raw_record": parsed.get("raw_record", ""),
             },
-            message_channel=target.get("message_channel", "customer-incidents"),
             coalesce_key=coalesce_key,
             coalesce_window_sec=coalesce_window,
         )

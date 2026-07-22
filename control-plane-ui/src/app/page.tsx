@@ -2,22 +2,19 @@ export default function Home() {
   return (
     <div className="space-y-10">
       <section className="space-y-4 pt-4">
-        <p className="text-[11px] uppercase tracking-[0.22em] text-[var(--color-text-tertiary)]">
-          Operational Command
-        </p>
         <h1 className="max-w-2xl font-display text-4xl font-normal leading-[1.15] tracking-tight text-[var(--color-text-primary)]">
-          Run agents, inspect traces, and keep workflow automations honest.
+          Operations overview
         </h1>
         <p className="max-w-xl text-base leading-7 text-[var(--color-text-secondary)]">
-          The control plane is where live task execution, replay telemetry,
-          schedules, and governance surfaces meet.
+          Monitor live task execution, review traces and replay telemetry,
+          manage schedules, and oversee approvals and governance.
         </p>
       </section>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         <DashboardCard
-          title="Agents"
-          href="/agents"
+          title="Workflows"
+          href="/workflows"
           description="Manage plugin identities, runtime posture, and configuration shape."
           icon={<AgentsIcon />}
         />

@@ -87,18 +87,24 @@ def _extract_incremental_tokens(event_data: dict[str, Any]) -> int | None:
                 latest_total = total_tokens
             continue
 
-        if message.get("type") != "system" or message.get("subtype") != "task_progress":
+        if message.get("type") != "system" or message.get("subtype") not in {"task_progress", "task_notification"}:
             continue
 
         payload = message.get("data")
         if not isinstance(payload, dict):
             continue
 
-        total_tokens = _coerce_total_tokens(payload.get("usage"))
+        total_tokens = _coerce_total_tokens(payload.get("workflow_usage"))
+        if total_tokens is None:
+            total_tokens = _coerce_total_tokens(payload.get("usage"))
         if total_tokens is not None:
             latest_total = total_tokens
 
     return latest_total
+
+
+def _monotonic_token_total(current: int | None, observed: int) -> int:
+    return max(int(current or 0), observed)
 
 
 def _can_deliver_approval_prompt(task: Task | None) -> bool:
@@ -189,16 +195,17 @@ async def receive_event(event: EventPayload):
             if event.event_type == "conversation_batch":
                 incremental_tokens = _extract_incremental_tokens(event.data)
                 if incremental_tokens is not None:
-                    task_updates["tokens_used"] = incremental_tokens
+                    task_updates["tokens_used"] = _monotonic_token_total(task.tokens_used, incremental_tokens)
 
             if event.event_type == "session_complete":
                 input_tokens = int(event.data.get("input_tokens", 0) or 0)
                 output_tokens = int(event.data.get("output_tokens", 0) or 0)
+                terminal_tokens = _monotonic_token_total(task.tokens_used, input_tokens + output_tokens)
                 task_updates.update(
                     {
                         "status": "succeeded",
                         "result": event.data,
-                        "tokens_used": input_tokens + output_tokens,
+                        "tokens_used": terminal_tokens,
                         "duration_sec": event.data.get("duration_sec"),
                         "error": None,
                     }
@@ -215,7 +222,7 @@ async def receive_event(event: EventPayload):
                     }
                 )
                 if input_tokens or output_tokens:
-                    task_updates["tokens_used"] = input_tokens + output_tokens
+                    task_updates["tokens_used"] = _monotonic_token_total(task.tokens_used, input_tokens + output_tokens)
             elif event.event_type == "session_timeout":
                 input_tokens = int(event.data.get("input_tokens", 0) or 0)
                 output_tokens = int(event.data.get("output_tokens", 0) or 0)
@@ -228,7 +235,7 @@ async def receive_event(event: EventPayload):
                     }
                 )
                 if input_tokens or output_tokens:
-                    task_updates["tokens_used"] = input_tokens + output_tokens
+                    task_updates["tokens_used"] = _monotonic_token_total(task.tokens_used, input_tokens + output_tokens)
 
             await session.execute(update(Task).where(Task.id == task_uuid).values(**task_updates))
 

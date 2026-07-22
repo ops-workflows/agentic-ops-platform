@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from shared.lib.mattermost_api import MattermostAPIError
 from shared.lib.message_bus import (
     MattermostMessageBus,
     SlackMessageBus,
@@ -93,6 +94,30 @@ def test_build_message_bus_selects_provider():
     assert isinstance(build_message_bus(provider="slack", channel_id="C1", **common), SlackMessageBus)
     with pytest.raises(ValueError):
         build_message_bus(provider="teams", **common)
+
+
+async def test_mattermost_post_preserves_provider_failure(monkeypatch):
+    state, get_thread, set_thread = _thread_state()
+
+    async def factory():
+        return _FakeClient({})
+
+    async def fail_post(*args, **kwargs):
+        raise MattermostAPIError("Mattermost channel 'vishal-test' was not found")
+
+    monkeypatch.setattr("shared.lib.message_bus.create_post", fail_post)
+    bus = MattermostMessageBus(
+        client_factory=factory,
+        api_url="https://mattermost.example.test",
+        bot_token="token",
+        channel_name="vishal-test",
+        get_thread_id=get_thread,
+        set_thread_id=set_thread,
+    )
+
+    assert await bus.post_to_thread("hello") is None
+    assert bus.last_error == "Mattermost channel 'vishal-test' was not found"
+    assert state["thread"] == ""
 
 
 async def test_slack_post_to_thread_sets_thread_id():

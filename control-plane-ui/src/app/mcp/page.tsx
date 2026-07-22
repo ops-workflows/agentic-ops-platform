@@ -67,11 +67,8 @@ function McpPageContent() {
   return (
     <div className="space-y-6">
       <div>
-        <p className="text-[11px] uppercase tracking-[0.2em] text-[var(--color-text-tertiary)]">
+        <h1 className="font-display text-4xl font-normal leading-[1.1] tracking-tight text-[var(--color-text-primary)]">
           MCP
-        </p>
-        <h1 className="mt-2 font-display text-4xl font-normal leading-[1.1] tracking-tight text-[var(--color-text-primary)]">
-          Tool catalog
         </h1>
       </div>
 
@@ -179,11 +176,8 @@ function McpPageFallback() {
   return (
     <div className="space-y-6">
       <div>
-        <p className="text-[11px] uppercase tracking-[0.2em] text-[var(--color-text-tertiary)]">
+        <h1 className="font-display text-4xl font-normal leading-[1.1] tracking-tight text-[var(--color-text-primary)]">
           MCP
-        </p>
-        <h1 className="mt-2 font-display text-4xl font-normal leading-[1.1] tracking-tight text-[var(--color-text-primary)]">
-          Tool catalog
         </h1>
       </div>
       <p className="text-sm text-[var(--color-text-tertiary)]">

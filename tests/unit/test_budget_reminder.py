@@ -45,6 +45,15 @@ def _get_sep():
 # ── Reminder gating ──────────────────────────────────────────
 
 
+def test_reminder_is_disabled_without_runtime_configuration(monkeypatch):
+    monkeypatch.delenv("ASK_USER_QUESTION_REMINDER_ENABLED", raising=False)
+
+    sep = _get_sep()
+    importlib.reload(sep)
+
+    assert sep.ASK_USER_QUESTION_REMINDER_ENABLED is False
+
+
 def test_reminder_suppressed_when_disabled(monkeypatch):
     sep = _get_sep()
     monkeypatch.setattr(sep, "ASK_USER_QUESTION_REMINDER_ENABLED", False)
@@ -87,9 +96,19 @@ def test_reminder_suppressed_below_min_turns():
     # MIN_TURNS env was set to 5 above.
     should, _ = sep._should_send_ask_user_question_reminder(
         {"turns": 3},
-        query_started_at=time.monotonic() - 1000,
+        query_started_at=time.monotonic() - 1,
     )
     assert should is False
+
+
+def test_time_reminder_ignores_min_turns():
+    sep = _get_sep()
+    should, ctx = sep._should_send_ask_user_question_reminder(
+        {"turns": 3},
+        query_started_at=time.monotonic() - 500,
+    )
+    assert should is True
+    assert ctx["trigger"] == "time_budget"
 
 
 def test_reminder_suppressed_if_recent_question():
@@ -133,6 +152,31 @@ def test_reminder_text_is_nonempty():
     assert len(text) > 50
 
 
+def test_thinking_mode_can_be_disabled(monkeypatch):
+    sep = _get_sep()
+    monkeypatch.setenv("CLAUDE_CODE_THINKING_MODE", "off")
+    assert sep._thinking_config_from_env() == ({"type": "disabled"}, "disabled")
+
+
+def test_thinking_mode_defaults_to_provider(monkeypatch):
+    sep = _get_sep()
+    monkeypatch.delenv("CLAUDE_CODE_THINKING_MODE", raising=False)
+    assert sep._thinking_config_from_env() == (None, "provider_default")
+
+
+def test_workflow_usage_sums_latest_per_subagent():
+    sep = _get_sep()
+    totals: dict[str, int] = {}
+
+    first = sep._annotate_workflow_usage({"task_id": "agent-a", "usage": {"total_tokens": 100}}, totals)
+    second = sep._annotate_workflow_usage({"task_id": "agent-b", "usage": {"total_tokens": 60}}, totals)
+    regressed = sep._annotate_workflow_usage({"task_id": "agent-a", "usage": {"total_tokens": 20}}, totals)
+
+    assert first["workflow_usage"] == {"total_tokens": 100, "agent_count": 1}
+    assert second["workflow_usage"] == {"total_tokens": 160, "agent_count": 2}
+    assert regressed["workflow_usage"] == {"total_tokens": 160, "agent_count": 2}
+
+
 def test_subagent_no_output_retry_text():
     sep = _get_sep()
     text = sep._subagent_no_output_retry_text()
@@ -173,6 +217,42 @@ def test_parse_question_response_out_of_range_falls_through():
     question = {"question": "Which?", "options": [{"label": "A"}]}
     # "5" is out of range, so it falls through to free-text
     assert sep._parse_question_response("5", question) == "5"
+
+
+@pytest.mark.asyncio
+async def test_undeliverable_question_does_not_emit_wait_event(monkeypatch):
+    sep = _get_sep()
+    events = []
+
+    async def capture_event(event_type, data):
+        events.append((event_type, data))
+
+    async def undeliverable_post(*_args, **_kwargs):
+        return None
+
+    async def append_transcript_messages(_messages):
+        return None
+
+    monkeypatch.setattr(sep, "report_event", capture_event)
+    monkeypatch.setattr(sep, "_post_thread_message", undeliverable_post)
+
+    result = await sep._handle_ask_user_question(
+        {
+            "questions": [
+                {
+                    "header": "Intent",
+                    "question": "Proceed?",
+                    "options": [{"label": "Yes"}],
+                }
+            ]
+        },
+        {},
+        {},
+        append_transcript_messages,
+    )
+
+    assert "Unable to deliver" in result.message
+    assert [event_type for event_type, _data in events] == ["permission_callback"]
 
 
 @pytest.mark.asyncio

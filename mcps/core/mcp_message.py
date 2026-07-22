@@ -104,7 +104,8 @@ async def _post_message_async(
         posted = await bus.post_to_thread(text)
 
     if not posted:
-        return {"error": "Message provider did not return a post"}
+        detail = str(getattr(bus, "last_error", "") or "").strip()
+        return {"error": detail or "Message provider did not return a post"}
     return {"success": True, "post_id": posted.id, "thread_id": posted.thread_id}
 
 
@@ -157,16 +158,24 @@ def post_message(
 
 @mcp.tool(annotations={"openWorldHint": True})
 def handoff_task(
-    workflow: Annotated[str, "Target workflow name for the follow-up task."],
-    prompt: Annotated[str, "Prompt to enqueue for the target workflow."],
-    text: Annotated[str, "Visible handoff note to post before creating the task."],
+    workflow: Annotated[
+        str,
+        "Different target workflow that owns the follow-up task; never use this for an in-session specialist.",
+    ],
+    prompt: Annotated[str, "Self-contained follow-up work to enqueue for that different workflow."],
+    text: Annotated[str, "Visible cross-workflow assignment note to post before creating the follow-up task."],
     channel: Annotated[str | None, "Optional channel name override. Defaults to the current task channel."] = None,
     channel_id: Annotated[str | None, "Optional channel ID override. Defaults to the current task channel ID."] = None,
     thread_id: Annotated[str | None, "Optional thread override. Defaults to the current task thread."] = None,
     metadata: Annotated[dict[str, Any] | None, "Optional structured metadata to attach to the created task."] = None,
     headers: dict[str, str] = CurrentHeaders(),
 ) -> dict[str, Any]:
-    """Use this when another workflow needs both a visible handoff and an actual queued task."""
+    """Assign follow-up work to another workflow, with a visible post and queued task.
+
+    Do not use this to delegate to, message, wait for, or retrieve a Claude Code
+    subagent in the current investigation. Use the built-in Agent and SendMessage
+    tools for internal specialist work.
+    """
     resolved_channel = _resolve_channel(channel, headers)
     resolved_channel_id = _resolve_channel_id(channel_id, headers)
     resolved_thread = _resolve_thread(thread_id, headers)

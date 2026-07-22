@@ -133,7 +133,10 @@ def test_active_release_selects_matching_config_and_bundle(monkeypatch, tmp_path
 
     assert Path(config_path).read_text(encoding="utf-8") == "default_model_profile: synced\n"
     assert bundle_path is None
-    assert bundle_uri == "https://objects.test/agentic-ops-bundles/releases/release-1/bundles/platform-test.tar.gz?exp=3600"
+    assert (
+        bundle_uri
+        == "https://objects.test/agentic-ops-bundles/releases/release-1/bundles/platform-test.tar.gz?exp=3600"
+    )
     assert checksum == "sha256:bundle-manifest"
 
 

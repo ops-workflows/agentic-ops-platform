@@ -136,13 +136,13 @@ export default function AgentDetailPage() {
       {tab === 'preview' &&
         (pluginFilesLoading && !pluginFiles ? (
           <div className="bg-ops-surface border border-ops-border rounded-card p-5 text-sm text-[var(--color-text-tertiary)]">
-            Loading plugin files...
+            Loading workflow files...
           </div>
         ) : (
           <PluginPreview
             agentYaml={pluginFiles?.agent_yaml || ''}
             files={pluginFiles?.files || {}}
-            emptyMessage="This agent has no plugin directory files available yet."
+            emptyMessage="This agent has no workflow files available yet."
           />
         ))}
 

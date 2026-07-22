@@ -48,3 +48,5 @@ async def test_provisioner_idempotent_on_unchanged_config(
 
     agents = (await db_session.execute(select(Agent).where(Agent.name == "platform-test"))).scalars().all()
     assert len(agents) == 1
+    schedules = (await db_session.execute(select(Schedule).where(Schedule.agent_id == agents[0].id))).scalars().all()
+    assert any(schedule.name == "test-daily" for schedule in schedules)

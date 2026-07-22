@@ -482,10 +482,7 @@ export default function MemoryPage() {
   return (
     <div className="space-y-6">
       <div>
-        <p className="text-[11px] uppercase tracking-[0.2em] text-[var(--color-text-tertiary)]">
-          Memory
-        </p>
-        <h1 className="mt-2 font-display text-4xl font-normal leading-[1.1] tracking-tight text-[var(--color-text-primary)]">
+        <h1 className="font-display text-4xl font-normal leading-[1.1] tracking-tight text-[var(--color-text-primary)]">
           Memory explorer
         </h1>
         <p className="mt-3 max-w-3xl text-sm leading-7 text-[var(--color-text-secondary)]">

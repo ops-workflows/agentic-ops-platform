@@ -75,7 +75,9 @@ async def _schedule_job_handler(agent_name: str, schedule_name: str, prompt: str
         )
         sched = result.scalar_one_or_none()
         if sched:
-            sched.last_run = datetime.now(UTC)
+            now = datetime.now(UTC)
+            sched.last_run = now
+            sched.next_run = _next_run_at(sched.cron, now)
             await session.commit()
 
     logger.info("Created scheduled task %s for %s/%s", task.id, agent_name, schedule_name)
@@ -101,11 +103,32 @@ def _parse_cron(cron_str: str) -> CronTrigger:
 def compute_next_run(cron_str: str) -> str | None:
     """Compute the next fire time from a cron expression. Returns ISO string or None."""
     try:
-        trigger = _parse_cron(cron_str)
-        next_fire = trigger.get_next_fire_time(None, datetime.now(UTC))
+        next_fire = _next_run_at(cron_str)
         return next_fire.isoformat() if next_fire else None
     except Exception:
         return None
+
+
+def _next_run_at(cron_str: str, after: datetime | None = None) -> datetime | None:
+    """Return the next UTC fire time for a cron expression."""
+    trigger = _parse_cron(cron_str)
+    reference = after or datetime.now(UTC)
+    return trigger.get_next_fire_time(None, reference)
+
+
+async def _persist_next_runs() -> None:
+    """Mirror in-memory APScheduler timing into persisted schedule status."""
+    if _scheduler is None:
+        return
+
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(Schedule, Agent.name).join(Agent, Schedule.agent_id == Agent.id).where(Schedule.enabled == True)  # noqa: E712
+        )
+        for schedule, agent_name in result.all():
+            job = _scheduler.get_job(_job_id(agent_name, schedule.name))
+            schedule.next_run = job.next_run_time if job else None
+        await session.commit()
 
 
 async def start_scheduler() -> None:
@@ -134,6 +157,7 @@ async def start_scheduler() -> None:
             logger.exception("Failed to register schedule %s/%s", agent_name, sched.name)
 
     _scheduler.start()
+    await _persist_next_runs()
     logger.info("Scheduler started with %d job(s)", len(_scheduler.get_jobs()))
 
 

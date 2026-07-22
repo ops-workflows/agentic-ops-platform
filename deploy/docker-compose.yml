@@ -76,6 +76,8 @@ services:
       HINDSIGHT_API_LLM_BASE_URL: ${HINDSIGHT_API_LLM_BASE_URL:-http://model-gateway:1235/v1}
       HINDSIGHT_API_LLM_API_KEY: ${LLM_API_KEY:-localdev-key}
       HINDSIGHT_API_LLM_MODEL: ${HINDSIGHT_API_LLM_MODEL:-example-model}
+      HINDSIGHT_API_RETAIN_MAX_COMPLETION_TOKENS: "4096"
+      HINDSIGHT_API_EMBEDDINGS_OPENAI_BATCH_SIZE: 1
       HINDSIGHT_API_DATABASE_URL: postgresql://${PG_USER:-agentic_ops}:${PG_PASSWORD:-localdev-postgres-password}@postgres:5432/${PG_DB:-agentic_ops}
       HINDSIGHT_API_DATABASE_SCHEMA: hindsight
       HINDSIGHT_API_VECTOR_EXTENSION: pgvector

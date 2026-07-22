@@ -26,7 +26,6 @@ source:
 
 target:
   workflow: example-workflow
-  message_channel: ops-alerts
   channel: gcp-pubsub
   prompt_template: |
     Process this Pub/Sub event.

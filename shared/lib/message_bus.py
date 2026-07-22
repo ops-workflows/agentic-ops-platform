@@ -68,11 +68,15 @@ class MattermostMessageBus:
         self.team_name = team_name
         self.get_thread_id = get_thread_id
         self.set_thread_id = set_thread_id
+        self.last_error = ""
 
     async def post_to_thread(self, text: str) -> MessageRef | None:
+        self.last_error = ""
         if not self.channel_name and not self.channel_id:
+            self.last_error = "No Mattermost channel name or channel ID is available for this task"
             return None
         if not self.bot_token:
+            self.last_error = "No Mattermost bot token is available for this task"
             return None
 
         client = await self.client_factory()
@@ -89,7 +93,8 @@ class MattermostMessageBus:
                 root_id=self.get_thread_id(),
             )
         except (MattermostAPIError, httpx.HTTPError) as exc:
-            logger.warning("Failed to post message-bus thread message: %s", exc)
+            self.last_error = str(exc)
+            logger.warning("Failed to post message-bus thread message: %s", self.last_error)
             return None
 
         message_id = str(post.get("id") or "")

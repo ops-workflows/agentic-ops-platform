@@ -199,9 +199,7 @@ def _format_bundle_uri(workflow: str) -> str:
     return template.format(workflow=workflow)
 
 
-def _resolve_workflow_bundle(
-    workflow: str, release: dict | None = None
-) -> tuple[str | None, str | None, str | None]:
+def _resolve_workflow_bundle(workflow: str, release: dict | None = None) -> tuple[str | None, str | None, str | None]:
     """Return local bundle path, bundle URI, and checksum for a workflow if configured."""
     if release:
         bundle = (release.get("bundles") or {}).get(workflow)
@@ -283,6 +281,10 @@ async def spawn_agent_session(task: Task) -> RuntimeHandle | None:
         agent_config = load_agent_yaml(task.workflow)
         task_metadata = task.task_metadata if isinstance(task.task_metadata, dict) else {}
         runtime = agent_config.get("runtime", {})
+        legacy_reminder = runtime.get("ask_user_question_reminder", {})
+        if not isinstance(legacy_reminder, dict):
+            legacy_reminder = {}
+        reminder_config = legacy_reminder
         container_image = runtime.get("container_image", "ai-ops-agent-runtime:latest")
         release = _load_active_release()
         platform_file = _active_platform_config_file(release)
@@ -296,20 +298,12 @@ async def spawn_agent_session(task: Task) -> RuntimeHandle | None:
             "MAX_TURNS": str(agent_config.get("session", {}).get("max_turns", 50)),
             "RUNTIME_TIMEOUT_SEC": str(runtime.get("runtime_timeout_sec", 300)),
             "OPERATOR_APPROVAL_TIMEOUT_SEC": str(runtime.get("approval_timeout_sec", 3600)),
-            "ASK_USER_QUESTION_REMINDER_ENABLED": str(
-                runtime.get("ask_user_question_reminder", {}).get("enabled", True)
-            ).lower(),
-            "ASK_USER_QUESTION_REMINDER_MIN_TURNS": str(
-                runtime.get("ask_user_question_reminder", {}).get("min_turns", 10)
-            ),
-            "ASK_USER_QUESTION_REMINDER_TURN_RATIO": str(
-                runtime.get("ask_user_question_reminder", {}).get("turn_budget_ratio", 0.7)
-            ),
-            "ASK_USER_QUESTION_REMINDER_TIME_RATIO": str(
-                runtime.get("ask_user_question_reminder", {}).get("time_budget_ratio", 0.75)
-            ),
+            "ASK_USER_QUESTION_REMINDER_ENABLED": str(reminder_config.get("enabled", bool(reminder_config))).lower(),
+            "ASK_USER_QUESTION_REMINDER_MIN_TURNS": str(reminder_config.get("min_turns", 10)),
+            "ASK_USER_QUESTION_REMINDER_TURN_RATIO": str(reminder_config.get("turn_budget_ratio", 0.7)),
+            "ASK_USER_QUESTION_REMINDER_TIME_RATIO": str(reminder_config.get("time_budget_ratio", 0.75)),
             "ASK_USER_QUESTION_REMINDER_RECENT_QUESTION_TURN_WINDOW": str(
-                runtime.get("ask_user_question_reminder", {}).get("recent_question_turn_window", 8)
+                reminder_config.get("recent_question_turn_window", 8)
             ),
             # ── Routing context for MCP ${VAR} header expansion (non-secret) ──
             "MESSAGE_CHANNEL": task.message_channel or "",

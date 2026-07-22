@@ -39,7 +39,6 @@ source:
 
 target:
   workflow: incident-investigator
-  message_channel: customer-incidents
 
 parsing:
   format: json

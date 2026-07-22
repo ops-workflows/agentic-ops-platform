@@ -51,7 +51,6 @@ connectors:
         subscription: ${GCP_PUBSUB_SUBSCRIPTION}
       target:
         workflow: sf-alerts-investigator
-        message_channel: sf-alerts
       parsing:
         format: json
         extract:
@@ -82,9 +81,10 @@ source:
     name_field: name
     metadata_key: object_text                  # metadata key the fetched text is stored under
     max_bytes: 200000                          # truncate the object read at this size
+    parser: text                               # `text` (default) or `email` for RFC 822/MIME files
+    max_body_chars: 4000                       # `email` only: readable body length after MIME/HTML parsing
 target:
   workflow: example-workflow
-  message_channel: ops-alerts
   channel: gcp-pubsub                          # task.channel label
   prompt_template: |                           # rendered via str.format_map over payload + metadata;
     Process this Pub/Sub event.                # missing keys render as empty strings
@@ -94,6 +94,9 @@ parsing:
   extract:                                     # dot-path extraction from the decoded JSON payload
     event_id: id
     event_type: type
+  email_extract:                               # optional regexes, used with `gcs_payload.parser: email`
+    alert_id: "Alert ID: ([A-Z0-9-]+)"         # capture group 1 is stored as metadata
+    description: body                           # use the readable parsed email body directly
 coalescing:
   enabled: false
   window_sec: 300
@@ -102,6 +105,17 @@ coalescing:
 
 Notes: messages are decoded as UTF-8 JSON (non-JSON still creates a task with
 `payload_text`); a failed task creation `nack`s the message for redelivery.
+For `gcs_payload.parser: email`, the connector extracts `email_subject`,
+`email_sender`, `email_recipient`, `email_date`, and `email_body_text`.
+`metadata_key` is populated with the readable body, preferring `text/plain` and
+falling back to HTML-to-text. This lets a deployment configure email intake
+without embedding a provider-specific parser in the connector image.
+`parsing.email_extract` can add deployment-specific metadata from regular
+expressions over the parsed headers and body; unmatched expressions are stored
+as `null`.
+The connector never selects an outbound message channel: a threadless task uses
+the target workflow's first `messaging.channels` entry, while a message-initiated
+task replies in its original thread.
 Requires GCP application default credentials reachable by
 `google-cloud-pubsub` (and `google-cloud-storage` if `gcs_payload` is used).
 On Kubernetes, prefer workload identity. When that is unavailable, put an
@@ -126,7 +140,6 @@ source:
     - caller_id
 target:
   workflow: incident-investigator
-  message_channel: customer-incidents
 parsing:
   format: json
   extract:                                     # dot-path extraction; supports "field.display_value"
