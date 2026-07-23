@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import case, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from shared.lib.models import Approval, Session, SessionEvent, Task, TaskEvent
+from shared.lib.models import Agent, Approval, Session, SessionEvent, Task, TaskEvent
 from shared.lib.workflow_paths import find_workflow_package
 
 logger = logging.getLogger(__name__)
@@ -23,10 +23,7 @@ WAITING_STATUSES = ("waiting_approval", "waiting_user_input")
 TERMINAL_STATUSES = ("succeeded", "failed", "lost", "timed_out")
 
 
-def _workflow_default_message_channel(workflow: str) -> str:
-    """Return the first declared workflow channel, if the package is available."""
-    package = find_workflow_package(workflow)
-    config = package.config if package else {}
+def _message_channel_from_config(config: dict | None) -> str:
     messaging = config.get("messaging") if isinstance(config, dict) else None
     channels = messaging.get("channels") if isinstance(messaging, dict) else None
     if not isinstance(channels, list):
@@ -34,7 +31,19 @@ def _workflow_default_message_channel(workflow: str) -> str:
     return next((str(channel).strip() for channel in channels if str(channel).strip()), "")
 
 
-def _normalize_message_route(
+async def _workflow_default_message_channel(session: AsyncSession, workflow: str) -> str:
+    """Return the first workflow channel from provisioned config or local YAML."""
+    result = await session.execute(select(Agent.config).where(Agent.name == workflow))
+    workflow_channel = _message_channel_from_config(result.scalar_one_or_none())
+    if workflow_channel:
+        return workflow_channel
+
+    package = find_workflow_package(workflow)
+    return _message_channel_from_config(package.config if package else None)
+
+
+async def _normalize_message_route(
+    session: AsyncSession,
     workflow: str,
     message_channel: str | None,
     message_thread: str | None,
@@ -45,7 +54,7 @@ def _normalize_message_route(
     if message_thread:
         return message_channel, normalized_metadata
 
-    workflow_channel = _workflow_default_message_channel(workflow)
+    workflow_channel = await _workflow_default_message_channel(session, workflow)
     if not workflow_channel or workflow_channel == message_channel:
         return message_channel, normalized_metadata
 
@@ -71,7 +80,9 @@ async def create_task(
     If coalesce_key is provided, checks for recent queued/running tasks with the
     same key. If found within the window, appends to the existing task instead.
     """
-    message_channel, metadata = _normalize_message_route(workflow, message_channel, message_thread, metadata)
+    message_channel, metadata = await _normalize_message_route(
+        session, workflow, message_channel, message_thread, metadata
+    )
 
     if coalesce_key:
         cutoff = datetime.now(UTC) - timedelta(seconds=coalesce_window_sec)

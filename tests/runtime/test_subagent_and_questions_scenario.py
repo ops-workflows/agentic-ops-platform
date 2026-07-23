@@ -19,9 +19,13 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from tests.fakes.mock_llm import Turn
+from tests.fakes.mock_llm import Turn, request_text_blob
 
 pytestmark = pytest.mark.scenario
+
+
+SHARED_CLAUDE_MD_MARKER = "PLATFORM_TEST_SHARED_CLAUDE_MD_MARKER"
+PLUGIN_CLAUDE_MD_MARKER = "PLATFORM_TEST_PLUGIN_CLAUDE_MD_MARKER"
 
 
 # ─── §2.2.1 Subagent delegation via Agent/Task tool ──────────────
@@ -86,6 +90,19 @@ async def test_subagent_delegation(
 
     blob = "\n".join(_json.dumps(r.get("body", {}), ensure_ascii=False) for r in requests)
     assert "SUBAGENT_OK" in blob, "subagent's marker did not flow through the LLM loop"
+
+    helper_request = next(
+        (
+            request["body"]
+            for request in requests
+            if "platform-test helper subagent" in request_text_blob(request["body"])
+        ),
+        None,
+    )
+    assert helper_request is not None, "Expected a model request for the helper subagent"
+    helper_prompt = request_text_blob(helper_request)
+    assert SHARED_CLAUDE_MD_MARKER in helper_prompt
+    assert PLUGIN_CLAUDE_MD_MARKER in helper_prompt
 
 
 # ─── §2.2.2 Subagent with no output triggers retry-text path ─────

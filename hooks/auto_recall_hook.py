@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit hook — auto-recall from Hindsight on the initial task prompt.
+"""SessionStart hook — auto-recall from Hindsight for the coordinator task.
 
 Queries Hindsight for memories relevant to the user's prompt and injects
 them as invisible additionalContext.  This gives agents baseline long-term
@@ -28,7 +28,7 @@ MAX_QUERY_CHARS = 800
 HINDSIGHT_BANKS_PREFIX = "/v1/default/banks"
 
 
-def emit_hook_event(*, status: str, detail: str = ""):
+def emit_hook_event(*, status: str, detail: str = "", hook_event: str = "SessionStart"):
     task_id = os.environ.get("TASK_ID", "")
     if not GATEWAY_EVENT_URL or not task_id:
         print(f"[auto_recall_hook] skipping emit: URL={GATEWAY_EVENT_URL!r} TASK_ID={task_id!r}", file=sys.stderr)
@@ -42,7 +42,7 @@ def emit_hook_event(*, status: str, detail: str = ""):
                 "event_type": "hook_event",
                 "data": {
                     "hook_name": "auto_recall",
-                    "hook_event": "UserPromptSubmit",
+                    "hook_event": hook_event,
                     "status": status,
                     "detail": detail[:1000],
                 },
@@ -128,16 +128,22 @@ def _limit_recall_result(result):
 
 
 def main():
-    """Read UserPromptSubmit event from stdin, query Hindsight, inject context."""
+    """Read a coordinator SessionStart event, query Hindsight, inject context."""
     try:
         event = json.loads(sys.stdin.read())
     except (json.JSONDecodeError, EOFError):
-        emit_hook_event(status="skipped", detail="Invalid UserPromptSubmit payload")
+        emit_hook_event(status="skipped", detail="Invalid hook payload")
         return
 
-    prompt = str(event.get("user_prompt") or event.get("prompt") or "").strip()
+    # Hook input sets agent_id only inside a subagent. Do not recall from
+    # child sessions or SendMessage-driven continuations.
+    if str(event.get("agent_id") or "").strip():
+        return
+
+    hook_event = str(event.get("hook_event_name") or "SessionStart")
+    prompt = str(event.get("user_prompt") or event.get("prompt") or os.environ.get("TASK_PROMPT") or "").strip()
     if not prompt:
-        emit_hook_event(status="skipped", detail="Empty prompt")
+        emit_hook_event(status="skipped", detail="Empty task prompt", hook_event=hook_event)
         return
 
     query = prompt[:MAX_QUERY_CHARS]
@@ -145,7 +151,11 @@ def main():
     task_workflow = os.environ.get("TASK_WORKFLOW", "")
 
     if not _claim_initial_recall(task_id):
-        emit_hook_event(status="skipped", detail="Recall already injected for this task")
+        emit_hook_event(
+            status="skipped",
+            detail="Recall already injected for this task",
+            hook_event=hook_event,
+        )
         return
 
     bank_id = resolve_bank_id(task_workflow)
@@ -157,7 +167,11 @@ def main():
             timeout=RECALL_TIMEOUT,
         )
         if resp.status_code != 200:
-            emit_hook_event(status="error", detail=f"HTTP {resp.status_code} from Hindsight API")
+            emit_hook_event(
+                status="error",
+                detail=f"HTTP {resp.status_code} from Hindsight API",
+                hook_event=hook_event,
+            )
             return
 
         result = _limit_recall_result(resp.json())
@@ -172,24 +186,36 @@ def main():
         recall_text = json.dumps(result, ensure_ascii=False, indent=2)
 
         if not recall_text or recall_text.strip() in ("", "[]", "{}", "null"):
-            emit_hook_event(status="skipped", detail="No similar incidents returned")
+            emit_hook_event(
+                status="skipped",
+                detail="No similar incidents returned",
+                hook_event=hook_event,
+            )
             return
 
-        emit_hook_event(status="success", detail=f"Injected {recall_count} similar past incidents from Hindsight")
+        emit_hook_event(
+            status="success",
+            detail=f"Injected {recall_count} similar past incidents from Hindsight",
+            hook_event=hook_event,
+        )
 
         output = {
             "hookSpecificOutput": {
-                "hookEventName": "UserPromptSubmit",
+                "hookEventName": hook_event,
                 "additionalContext": ("[Long-term memory — similar past incidents]\n" + recall_text),
             }
         }
         print(json.dumps(output))
 
     except httpx.TimeoutException:
-        emit_hook_event(status="error", detail="Hindsight auto-recall timed out")
+        emit_hook_event(
+            status="error",
+            detail="Hindsight auto-recall timed out",
+            hook_event=hook_event,
+        )
         print("Hindsight auto-recall timed out — skipping", file=sys.stderr)
     except Exception as exc:
-        emit_hook_event(status="error", detail=str(exc))
+        emit_hook_event(status="error", detail=str(exc), hook_event=hook_event)
         print(f"Hindsight auto-recall error: {exc}", file=sys.stderr)
 
 

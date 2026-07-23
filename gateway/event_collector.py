@@ -174,11 +174,15 @@ async def receive_event(event: EventPayload):
                         }
                     )
 
-            if event.event_type == "user_question_requested":
+            if event.event_type in {"user_question_requested", "user_question_delivery_failed"}:
                 task_updates.update(
                     {
                         "status": "waiting_user_input",
-                        "wait_reason": "ask_user_question",
+                        "wait_reason": (
+                            "ask_user_question_delivery_failed"
+                            if event.event_type == "user_question_delivery_failed"
+                            else "ask_user_question"
+                        ),
                         "wait_deadline": datetime.now(UTC) + timedelta(seconds=3600),
                     }
                 )
@@ -197,7 +201,7 @@ async def receive_event(event: EventPayload):
                 if incremental_tokens is not None:
                     task_updates["tokens_used"] = _monotonic_token_total(task.tokens_used, incremental_tokens)
 
-            if event.event_type == "session_complete":
+            if event.event_type == "session_complete" and task.status not in {"waiting_approval", "waiting_user_input"}:
                 input_tokens = int(event.data.get("input_tokens", 0) or 0)
                 output_tokens = int(event.data.get("output_tokens", 0) or 0)
                 terminal_tokens = _monotonic_token_total(task.tokens_used, input_tokens + output_tokens)

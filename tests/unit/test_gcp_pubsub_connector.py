@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from shared.lib import db, task_queue
+
 MODULE_PATH = Path(__file__).resolve().parents[2] / "connectors/gcp-pubsub-connector/main.py"
 SPEC = importlib.util.spec_from_file_location("gcp_pubsub_connector_main", MODULE_PATH)
 assert SPEC and SPEC.loader
@@ -155,3 +157,40 @@ def test_render_prompt_omits_missing_parsed_values():
     rendered = main._render_prompt("Flow: {flow_name}\nApex: {apex_class}", {"flow_name": None})
 
     assert rendered == "Flow: \nApex: "
+
+
+@pytest.mark.asyncio
+async def test_create_task_defers_message_channel_to_workflow(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeSession:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, exc_type, exc_value, traceback):
+            return False
+
+    async def fake_create_task(session, **kwargs):
+        captured.update(kwargs)
+
+        class Task:
+            id = "task-123"
+
+        return Task()
+
+    monkeypatch.setattr(db, "async_session_factory", lambda: FakeSession())
+    monkeypatch.setattr(task_queue, "create_task", fake_create_task)
+
+    await main._create_task(
+        {"event_id": "event-1"},
+        '{"event_id": "event-1"}',
+        {},
+        {
+            "target": {
+                "workflow": "sf-alerts-investigator",
+                "channel": "gcp-pubsub",
+            }
+        },
+    )
+
+    assert "message_channel" not in captured

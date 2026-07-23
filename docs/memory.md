@@ -18,7 +18,7 @@ remember to call the tools:
 
 | Hook | Event | Behavior |
 | --- | --- | --- |
-| `hooks/auto_recall_hook.py` | `UserPromptSubmit` | Queries long-term memory for entries relevant to the task prompt and injects them as invisible `additionalContext` (labeled `[Long-term memory — similar past incidents]`), so an agent starts with that context without an explicit `recall_similar` call. Exits silently on empty/failed recall. |
+| `hooks/auto_recall_hook.py` | `SessionStart` | Queries long-term memory for entries relevant to the coordinator task prompt and injects them as invisible `additionalContext` (labeled `[Long-term memory — similar past incidents]`), so the main agent starts with that context without an explicit `recall_similar` call. It skips subagents. |
 | `hooks/retain_incident_hook.py` | `SubagentStop` | On investigator completion, writes two memories: a business-facing RCA record (for recall and digests) and a workflow-learning trace (for later reflection). Never blocks the session. |
 
 Explicit tools remain available for targeted retrieval — e.g. a digest

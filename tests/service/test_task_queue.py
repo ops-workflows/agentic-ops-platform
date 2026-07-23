@@ -6,6 +6,7 @@ Covers: create_task, dequeue with SKIP LOCKED, coalescing.
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -45,7 +46,7 @@ async def test_create_task_persists_metadata_and_emits_event(db_session) -> None
 async def test_threadless_task_uses_workflow_default_message_channel(db_session, monkeypatch) -> None:
     monkeypatch.setattr(
         "shared.lib.task_queue._workflow_default_message_channel",
-        lambda _workflow: "workflow-default",
+        AsyncMock(return_value="workflow-default"),
     )
 
     task = await create_task(

@@ -220,7 +220,7 @@ def test_parse_question_response_out_of_range_falls_through():
 
 
 @pytest.mark.asyncio
-async def test_undeliverable_question_does_not_emit_wait_event(monkeypatch):
+async def test_undeliverable_question_reports_delivery_failure_and_interrupts(monkeypatch):
     sep = _get_sep()
     events = []
 
@@ -252,7 +252,8 @@ async def test_undeliverable_question_does_not_emit_wait_event(monkeypatch):
     )
 
     assert "Unable to deliver" in result.message
-    assert [event_type for event_type, _data in events] == ["permission_callback"]
+    assert result.interrupt is True
+    assert [event_type for event_type, _data in events] == ["permission_callback", "user_question_delivery_failed"]
 
 
 @pytest.mark.asyncio

@@ -111,3 +111,51 @@ def test_auto_recall_timeout_is_fail_open(monkeypatch, tmp_path):
 
     assert stdout.getvalue() == ""
     assert "Hindsight auto-recall timed out" in stderr.getvalue()
+
+
+def test_auto_recall_uses_task_prompt_at_session_start(monkeypatch, tmp_path):
+    monkeypatch.setenv("TASK_ID", "task-session-start")
+    monkeypatch.setenv("TASK_PROMPT", "Investigate the Salesforce alert")
+    hook = _load_auto_recall_hook_module()
+    monkeypatch.setattr(hook.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(hook, "resolve_bank_id", lambda workflow: "test-bank")
+
+    def fake_post(url: str, json: dict, timeout: float):
+        if url.endswith("/memories/recall"):
+            assert json["query"] == "Investigate the Salesforce alert"
+            return _Response({"items": [{"id": "1", "text": "similar incident"}]})
+        return _Response({})
+
+    monkeypatch.setattr(hook.httpx, "post", fake_post)
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(json.dumps({"hook_event_name": "SessionStart", "source": "startup"})),
+    )
+    stdout = io.StringIO()
+    with redirect_stdout(stdout):
+        hook.main()
+
+    assert '"hookEventName": "SessionStart"' in stdout.getvalue()
+    assert "similar incident" in stdout.getvalue()
+
+
+def test_auto_recall_skips_subagents(monkeypatch, tmp_path):
+    monkeypatch.setenv("TASK_ID", "task-subagent")
+    hook = _load_auto_recall_hook_module()
+    monkeypatch.setattr(hook.tempfile, "gettempdir", lambda: str(tmp_path))
+
+    def fail_post(*args, **kwargs):
+        raise AssertionError("subagent must not call Hindsight")
+
+    monkeypatch.setattr(hook.httpx, "post", fail_post)
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(json.dumps({"hook_event_name": "SessionStart", "agent_id": "child-123"})),
+    )
+    stdout = io.StringIO()
+    with redirect_stdout(stdout):
+        hook.main()
+
+    assert stdout.getvalue() == ""

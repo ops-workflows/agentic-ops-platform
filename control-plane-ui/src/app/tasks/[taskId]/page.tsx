@@ -106,6 +106,17 @@ function fmtTime(value: string): string {
       });
 }
 
+function fmtEventTimestamp(value: string): string {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  const date = d.toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+  return `${date.replace(/ (\d{4})$/, ', $1')} · ${fmtTime(value)}`;
+}
+
 function fmtDur(s: number | null | undefined): string {
   if (s == null) return '-';
   if (s < 1) return `${Math.round(s * 1000)}ms`;
@@ -255,52 +266,6 @@ function parseSendMessagePreview(input: string): {
   }
 }
 
-function parseSendMessageResult(input: string): {
-  message?: string;
-  recipientId?: string;
-} {
-  const nestedJsonMatch = input.match(
-    /["']text["']\s*:\s*["'](\{.*\})["']\s*}/,
-  );
-  const normalized = nestedJsonMatch?.[1]?.replace(/\\"/g, '"') ?? input;
-  try {
-    const parsed = JSON.parse(normalized) as Record<string, unknown>;
-    return {
-      message: typeof parsed.message === 'string' ? parsed.message : undefined,
-      recipientId:
-        typeof parsed.recipient === 'string'
-          ? parsed.recipient
-          : typeof parsed.to === 'string'
-            ? parsed.to
-            : undefined,
-    };
-  } catch {
-    const messageMatch = input.match(
-      /"message"\s*:\s*"([\s\S]*?)"\s*,\s*"(?:resumedAgentId|pin|recipient|success)"/,
-    );
-    if (messageMatch) {
-      let message = messageMatch[1];
-      for (let index = 0; index < 2; index++) {
-        message = message.replace(/\\"/g, '"');
-      }
-      return {
-        message: message.replace(/\\'/g, "'").replace(/\\n/g, '\n'),
-        recipientId: input.match(
-          /(?:delivery to|recipient[":\s]+)([\w-]+)/i,
-        )?.[1],
-      };
-    }
-    return {
-      message: input
-        .match(/"message"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/)?.[1]
-        ?.replace(/\\"/g, '"'),
-      recipientId: input.match(
-        /(?:delivery to|recipient[":\s]+)([\w-]+)/i,
-      )?.[1],
-    };
-  }
-}
-
 function summarizeTaskType(value: unknown): string | undefined {
   if (typeof value !== 'string' || !value.trim()) return undefined;
   return value.replace(/_/g, ' ');
@@ -348,6 +313,7 @@ function buildTree(
   const heartbeats: SessionEvent[] = [];
   const toolNameMap = new Map<string, string>();
   const pendingToolCalls = new Map<string, TraceNode>();
+  const messageToolIds = new Set<string>();
   const subagentsByTaskId = new Map<string, TraceNode>();
   // Subagent node keyed by the Task/Agent tool_use id that spawned it. Subagent
   // messages carry that id in parent_tool_use_id, letting us nest their real
@@ -373,15 +339,6 @@ function buildTree(
 
   function currentParent(): TraceNode {
     return activeSubagent ?? root;
-  }
-
-  function appendSubagentResult(parent: TraceNode, result: TraceNode) {
-    parent.children.push({
-      ...result,
-      kind: 'result',
-      label: '',
-      meta: { ...(result.meta ?? {}), result_role: 'subagent_return' },
-    });
   }
 
   // Resolve the owning branch for a conversation message. Subagent messages set
@@ -565,15 +522,25 @@ function buildTree(
             const parent = resolveMsgParent(msg);
             const sender =
               parent === root ? (defaultAgent ?? 'Coordinator') : parent.label;
+            const message = messageInfo?.message?.trim();
+            const recipientId = messageInfo?.recipientId?.trim();
+
+            if (isInternalMessage) messageToolIds.add(toolId);
+
+            // An incomplete SendMessage payload has no useful audit value and
+            // should not be rendered as an invented "specialist" destination.
+            if (isInternalMessage && (!message || !recipientId)) {
+              continue;
+            }
             const toolNode: TraceNode = {
               id: `${event.id}-tc-${toolId}`,
               kind: isInternalMessage ? 'messaging' : 'tool_call',
               timestamp: ts,
               label: isInternalMessage
-                ? `${sender} -> ${messageInfo?.recipientId ?? 'specialist'}`
+                ? `${sender} -> ${recipientId}`
                 : traceToolName,
               body: isInternalMessage
-                ? messageInfo?.message
+                ? message
                 : isSkill
                   ? undefined
                   : toolInput,
@@ -582,8 +549,8 @@ function buildTree(
               raw: block,
               meta: {
                 tool_use_id: toolId,
-                ...(isInternalMessage && messageInfo?.recipientId
-                  ? { recipient_id: messageInfo.recipientId }
+                ...(isInternalMessage && recipientId
+                  ? { recipient_id: recipientId }
                   : {}),
                 ...(skillName ? { skill: skillName } : {}),
               },
@@ -640,15 +607,13 @@ function buildTree(
           };
 
           const parentCall = pendingToolCalls.get(toolUseId);
+          if (!isErr && messageToolIds.has(toolUseId)) {
+            pendingToolCalls.delete(toolUseId);
+            continue;
+          }
           if (parentCall) {
             if (parentCall.kind === 'messaging') {
-              const delivery = parseSendMessageResult(preview);
-              parentCall.children.push({
-                ...resultNode,
-                kind: 'result',
-                label: '',
-                body: formatTraceBody(delivery.message ?? preview),
-              });
+              if (isErr) parentCall.children.push(resultNode);
               pendingToolCalls.delete(toolUseId);
               continue;
             }
@@ -661,7 +626,7 @@ function buildTree(
                   agent_id: agentId,
                 };
               }
-              appendSubagentResult(parentCall, resultNode);
+              if (isErr) parentCall.children.push(resultNode);
               pendingToolCalls.delete(toolUseId);
               continue;
             }
@@ -711,9 +676,18 @@ function buildTree(
             };
 
             const parentCall = pendingToolCalls.get(toolUseId);
+            if (!isErr && messageToolIds.has(toolUseId)) {
+              pendingToolCalls.delete(toolUseId);
+              continue;
+            }
             if (parentCall) {
+              if (parentCall.kind === 'messaging') {
+                if (isErr) parentCall.children.push(resultNode);
+                pendingToolCalls.delete(toolUseId);
+                continue;
+              }
               if (parentCall.kind === 'subagent') {
-                appendSubagentResult(parentCall, resultNode);
+                if (isErr) parentCall.children.push(resultNode);
                 pendingToolCalls.delete(toolUseId);
                 continue;
               }
@@ -735,11 +709,53 @@ function buildTree(
               ? (msg.data as Record<string, unknown>)
               : {};
 
+          if (subtype === 'task_notification') {
+            const taskId =
+              typeof sysData.task_id === 'string' ? sysData.task_id : undefined;
+            const summary =
+              typeof sysData.summary === 'string' ? sysData.summary : undefined;
+            const status =
+              typeof sysData.status === 'string' ? sysData.status : undefined;
+            const toolUseId =
+              typeof sysData.tool_use_id === 'string'
+                ? sysData.tool_use_id
+                : undefined;
+            const subagent =
+              (taskId ? subagentsByTaskId.get(taskId) : undefined) ??
+              (toolUseId ? subagentNodesByToolId.get(toolUseId) : undefined);
+            if (subagent && status === 'completed' && summary?.trim()) {
+              if (taskId) subagentsByTaskId.set(taskId, subagent);
+              const existing = subagent.children.find(
+                (child) => child.meta?.result_role === 'subagent_return',
+              );
+              if (existing) {
+                existing.timestamp = ts;
+                existing.body = summary;
+                existing.raw = msg;
+              } else {
+                subagent.children.push({
+                  id: `${event.id}-sub-result-${i}`,
+                  kind: 'result',
+                  timestamp: ts,
+                  label: 'Branch findings',
+                  body: summary,
+                  children: [],
+                  raw: msg,
+                  meta: { result_role: 'subagent_return' },
+                });
+              }
+            }
+            continue;
+          }
+
           if (
             subtype === 'thinking_tokens' ||
             subtype === 'init' ||
-            subtype === 'task_updated' ||
-            subtype === 'task_notification'
+            subtype === 'status' ||
+            subtype === 'hook_started' ||
+            subtype === 'hook_response' ||
+            subtype === 'compact_boundary' ||
+            subtype === 'task_updated'
           ) {
             continue;
           }
@@ -757,7 +773,8 @@ function buildTree(
                 : undefined;
             const taskType = summarizeTaskType(sysData.task_type);
             const subagentNode = toolUseId
-              ? pendingToolCalls.get(toolUseId)
+              ? (subagentNodesByToolId.get(toolUseId) ??
+                pendingToolCalls.get(toolUseId))
               : undefined;
 
             if (subagentNode?.kind === 'subagent') {
@@ -806,24 +823,30 @@ function buildTree(
           continue;
         }
 
-        /* ── Final result ── */
+        /* ── Coordinator result snapshot ── */
         if (msg.type === 'result') {
           const preview =
             typeof msg.result_preview === 'string' ? msg.result_preview : '';
           const turns = typeof msg.num_turns === 'number' ? msg.num_turns : 0;
           stats.totalTurns = turns;
           const previousNode = root.children[root.children.length - 1];
+          const previousRaw = previousNode?.raw as
+            | Record<string, unknown>
+            | undefined;
           if (
             previousNode?.kind === 'assistant' &&
+            !previousRaw?.parent_tool_use_id &&
             isDuplicateNarrative(previousNode.body, preview)
           ) {
             root.children.pop();
           }
           const resultNode: TraceNode = {
             id: `${event.id}-res-${i}`,
-            kind: 'result',
+            // The stream result is a coordinator snapshot. session_complete
+            // below promotes only the final snapshot to RESULT Final.
+            kind: 'assistant',
             timestamp: ts,
-            label: 'Snapshot',
+            label: '',
             body: preview,
             children: [],
             raw: msg,
@@ -855,6 +878,7 @@ function buildTree(
           resultNodes[resultNodes.length - 1] ??
           [...root.children].reverse().find((n) => n.kind === 'result');
         if (resultNode) {
+          resultNode.kind = 'result';
           resultNode.label = 'Final';
           if (fullResult.length > (resultNode.body?.length ?? 0))
             resultNode.body = fullResult;
@@ -943,6 +967,26 @@ function buildTree(
     }
   }
 
+  // Completion notifications can arrive before delayed child conversation
+  // batches. Make the terminal finding authoritative, remove its duplicated
+  // assistant narrative, and keep it last within that child branch.
+  for (const subagent of subagentNodesByToolId.values()) {
+    const branchResult = subagent.children.find(
+      (child) => child.meta?.result_role === 'subagent_return',
+    );
+    if (!branchResult) continue;
+    subagent.children = subagent.children.filter(
+      (child) =>
+        child === branchResult ||
+        child.kind !== 'assistant' ||
+        !isDuplicateNarrative(child.body, branchResult.body),
+    );
+    subagent.children = subagent.children.filter(
+      (child) => child !== branchResult,
+    );
+    subagent.children.push(branchResult);
+  }
+
   function replaceRecipientIds(nodes: TraceNode[]) {
     for (const node of nodes) {
       if (node.kind === 'messaging' && node.meta?.recipient_id) {
@@ -956,24 +1000,6 @@ function buildTree(
     }
   }
   replaceRecipientIds(root.children);
-
-  function moveCanonicalResultsToEnd(node: TraceNode) {
-    for (const child of node.children) {
-      moveCanonicalResultsToEnd(child);
-    }
-    const canonicalResults = node.children.filter(
-      (child) =>
-        child.meta?.result_role === 'subagent_return' ||
-        (node === root && child.meta?.result_role === 'session_result'),
-    );
-    if (canonicalResults.length) {
-      node.children = [
-        ...node.children.filter((child) => !canonicalResults.includes(child)),
-        ...canonicalResults,
-      ];
-    }
-  }
-  moveCanonicalResultsToEnd(root);
 
   return {
     root,
@@ -1246,7 +1272,7 @@ function TraceNodeView({
   const defaultState = () => {
     return (
       node.badge === 'REQUEST' ||
-      (node.kind === 'result' && node.label === 'Final')
+      (node.meta?.result_role === 'session_result' && node.label === 'Final')
     );
   };
 
@@ -1300,7 +1326,7 @@ function TraceNodeView({
             {node.label}
           </span>
           <span className="ml-auto mt-0.5 hidden flex-none pl-2 text-[10px] tabular-nums text-[var(--color-text-tertiary)] sm:inline">
-            {fmtTime(node.timestamp)}
+            {fmtEventTimestamp(node.timestamp)}
           </span>
           {isExpandable && (
             <span

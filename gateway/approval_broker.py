@@ -158,23 +158,18 @@ async def ensure_approval_prompt_posted(
 
     metadata = approval.approval_metadata or {}
     gateway_delivery = metadata.get("gateway_delivery") or {}
-    if gateway_delivery.get("post_id") or gateway_delivery.get("delivery_failed_at"):
+    if gateway_delivery.get("post_id"):
         return approval
 
     await session.flush()
 
     if not (task.message_channel or task.message_thread or task.task_metadata.get("channel_id")):
-        await record_approval_result(
-            session,
-            task,
-            approval,
-            approved=False,
-            reason="Approval channel unavailable for this task",
-            approved_by="gateway",
-            approved_by_user_id="gateway",
-            approval_reply="delivery_failed",
-            source="gateway_delivery",
-        )
+        metadata["gateway_delivery"] = {
+            "delivery_failed_at": datetime.now(UTC).isoformat(),
+            "error": "Approval channel unavailable for this task",
+        }
+        approval.approval_metadata = metadata
+        approval.updated_at = datetime.now(UTC)
         return approval
 
     text, props = _approval_post_payload(task, approval)
@@ -209,17 +204,6 @@ async def ensure_approval_prompt_posted(
             }
             approval.approval_metadata = metadata
             approval.updated_at = datetime.now(UTC)
-            await record_approval_result(
-                session,
-                task,
-                approval,
-                approved=False,
-                reason=f"Unable to deliver approval request: {exc}",
-                approved_by="gateway",
-                approved_by_user_id="gateway",
-                approval_reply="delivery_failed",
-                source="gateway_delivery",
-            )
             return approval
 
     metadata = approval.approval_metadata or {}

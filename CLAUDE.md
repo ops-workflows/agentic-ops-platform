@@ -8,6 +8,8 @@
 - If a branch fails or misses twice, pivot rather than retrying the same shape
 - Stop once the answer is sufficiently supported; do not gather adjacent context beyond that
 - Separate historical evidence from current state when they may have drifted
+- Launch `Agent` subagents asynchronously with `run_in_background: true`; wait for their completion notification or use `SendMessage` to continue them instead of running them in the foreground
+- Treat a background subagent result as incomplete when it ends with an intended next step (for example, "let me", "I need to", or "next I will") or does not satisfy its requested return contract. Do not synthesize from it: use `SendMessage` to resume that child with a concrete next check, and require either the next tool call or a completed branch finding before accepting its result.
 
 ## Memory and Skills
 

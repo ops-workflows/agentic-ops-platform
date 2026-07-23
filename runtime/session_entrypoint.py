@@ -1129,6 +1129,14 @@ async def _handle_ask_user_question(
         started_at_ms = int(time.time() * 1000)
         posted = await _post_thread_message(secret_env, question_prompt)
         if not posted:
+            await report_event(
+                "user_question_delivery_failed",
+                {
+                    "question_count": len(tool_input.get("questions", [])),
+                    "error": "Unable to deliver AskUserQuestion through the configured message bus",
+                    "thread_id_present": bool(_current_thread_id()),
+                },
+            )
             return PermissionResultDeny(
                 message="Unable to deliver AskUserQuestion through the configured message bus",
                 interrupt=True,
@@ -1564,6 +1572,7 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
         cwd=str(PLUGIN_DIR),
         cli_path=claude_cli_path,
         permission_mode=permission_mode,
+        setting_sources=["project"],
     )
     thinking_config, thinking_mode = _thinking_config_from_env()
     if thinking_config is not None:
@@ -1690,7 +1699,8 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
     # fails with "Tool permission request failed: Error: Stream closed" because
     # can_use_tool responses travel back over the same stdin channel. Track
     # in-flight async subagents so we only close stdin once none remain.
-    pending_async_subagents = 0
+    pending_async_subagent_tool_ids: set[str] = set()
+    async_subagent_task_ids: dict[str, str] = {}
     observed_turns = 0
     query_started_at = time.monotonic()
 
@@ -1706,6 +1716,12 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
             }
         )
         return queue
+
+    async def close_prompt_stream_when_idle() -> None:
+        nonlocal prompt_stream_closed
+        if progress_state.get("last_result_text") and not pending_async_subagent_tool_ids and not prompt_stream_closed:
+            prompt_stream_closed = True
+            await prompt_queue.put(None)
 
     async def prompt_stream(queue: asyncio.Queue[dict[str, Any] | None]):
         while True:
@@ -1842,6 +1858,8 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
                             assistant_text_parts.append(block_text)
                     elif hasattr(block, "name"):
                         tool_names_by_use_id[str(block.id)] = str(block.name)
+                        if block.name in {"Agent", "Task"}:
+                            pending_async_subagent_tool_ids.add(str(block.id))
                         blocks.append(
                             {
                                 "type": "tool_use",
@@ -1894,9 +1912,7 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
                 # hanging in heartbeat-only state. If a subagent is still
                 # running, keep stdin open so its tool permission requests can
                 # be answered over the control stream.
-                if pending_async_subagents <= 0 and not prompt_stream_closed:
-                    prompt_stream_closed = True
-                    await prompt_queue.put(None)
+                await close_prompt_stream_when_idle()
 
             elif hasattr(message, "subtype") and hasattr(message, "data"):
                 # SystemMessage
@@ -1909,12 +1925,24 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
                 # Track async subagent lifecycle so we don't close stdin while a
                 # subagent still needs to answer tool permission requests.
                 if message.subtype == "task_started":
-                    pending_async_subagents += 1
+                    tool_use_id = str(safe_data.get("tool_use_id") or "") if isinstance(safe_data, dict) else ""
+                    task_id = str(safe_data.get("task_id") or "") if isinstance(safe_data, dict) else ""
+                    if tool_use_id:
+                        pending_async_subagent_tool_ids.add(tool_use_id)
+                    if tool_use_id and task_id:
+                        async_subagent_task_ids[task_id] = tool_use_id
                 elif message.subtype == "task_updated":
-                    patch = safe_data.get("patch") if isinstance(safe_data, dict) else None
-                    patch_status = patch.get("status") if isinstance(patch, dict) else None
-                    if patch_status in ("completed", "failed", "cancelled", "canceled"):
-                        pending_async_subagents = max(0, pending_async_subagents - 1)
+                    # task_updated precedes task_notification and can describe an
+                    # intermediate completion before a specialist's usable finding
+                    # arrives. Keep the control stream open until notification.
+                    pass
+                elif message.subtype == "task_notification" and isinstance(safe_data, dict):
+                    task_id = str(safe_data.get("task_id") or "")
+                    tool_use_id = str(safe_data.get("tool_use_id") or async_subagent_task_ids.pop(task_id, ""))
+                    terminal_status = str(safe_data.get("status") or "").lower()
+                    if tool_use_id and terminal_status in {"completed", "failed", "cancelled", "canceled"}:
+                        pending_async_subagent_tool_ids.discard(tool_use_id)
+                        await close_prompt_stream_when_idle()
 
             else:
                 # Unknown message type — log it
@@ -1936,6 +1964,9 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
             ):
                 tool_use_id = str(msg_record.get("tool_use_id") or "")
                 preview = str(msg_record.get("content_preview") or "")
+                if msg_record.get("is_error"):
+                    pending_async_subagent_tool_ids.discard(tool_use_id)
+                    await close_prompt_stream_when_idle()
                 if tool_use_id and tool_use_id not in empty_subagent_retries and _is_subagent_no_output_result(preview):
                     empty_subagent_retries.add(tool_use_id)
                     retry_text = _subagent_no_output_retry_text()
