@@ -17,6 +17,8 @@ async def _make_client(fixture_workflows_dir: Path) -> httpx.AsyncClient:
     from shared.lib.config import settings
 
     settings.workflow_repo_paths = str(fixture_workflows_dir)
+    settings.workflow_repo_local_path = str(fixture_workflows_dir)
+    settings.workflow_repo_display_path = str(fixture_workflows_dir)
     settings.workflow_repo_url = ""
     settings.hindsight_url = "http://127.0.0.1:1"
     if not getattr(settings, "object_store_secret_key", ""):
@@ -47,6 +49,7 @@ async def test_workflow_repo_status_returns_local_source_mode_by_default(
         payload = resp.json()
         assert payload["source_mode"] == "local"
         assert payload["source_url"] is None
+        assert payload["source_path"] == str(fixture_workflows_dir)
         assert payload["pinned_ref"] is None
         assert payload["discovered_workflows"] == []
 

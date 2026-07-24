@@ -186,6 +186,7 @@ export interface Connector {
 
 export interface WorkflowRepoStatus {
   source_url: string | null;
+  source_path: string | null;
   source_mode: 'remote' | 'local';
   default_ref: string | null;
   pinned_ref: string | null;

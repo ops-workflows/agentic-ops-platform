@@ -1451,6 +1451,21 @@ def _tool_input_preview(tool_name: str, tool_input: Any) -> str:
     return json.dumps(tool_input, default=str)[:500]
 
 
+def _resumed_subagent_recipient(
+    tool_name: str,
+    tool_input: Any,
+    task_owners: dict[str, str],
+    pending_tool_use_ids: set[str],
+) -> str | None:
+    """Return a completed child task targeted by a SendMessage resume."""
+    if tool_name != "SendMessage" or not isinstance(tool_input, dict):
+        return None
+    recipient = str(tool_input.get("recipient") or tool_input.get("to") or "")
+    if recipient and recipient in task_owners and task_owners[recipient] not in pending_tool_use_ids:
+        return recipient
+    return None
+
+
 def _humanize_tool_name(tool_name: str) -> str:
     """Convert internal tool names into a user-facing label."""
     raw_name = tool_name.strip()
@@ -1857,15 +1872,25 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
                         if block_text:
                             assistant_text_parts.append(block_text)
                     elif hasattr(block, "name"):
-                        tool_names_by_use_id[str(block.id)] = str(block.name)
-                        if block.name in {"Agent", "Task"}:
-                            pending_async_subagent_tool_ids.add(str(block.id))
+                        tool_name = str(block.name)
+                        tool_use_id = str(block.id)
+                        tool_names_by_use_id[tool_use_id] = tool_name
+                        if tool_name in {"Agent", "Task"}:
+                            pending_async_subagent_tool_ids.add(tool_use_id)
+                        elif resumed_task_id := _resumed_subagent_recipient(
+                            tool_name,
+                            getattr(block, "input", {}),
+                            async_subagent_task_ids,
+                            pending_async_subagent_tool_ids,
+                        ):
+                            pending_async_subagent_tool_ids.add(tool_use_id)
+                            async_subagent_task_ids[resumed_task_id] = tool_use_id
                         blocks.append(
                             {
                                 "type": "tool_use",
-                                "name": block.name,
-                                "id": block.id,
-                                "input_preview": _tool_input_preview(block.name, getattr(block, "input", {})),
+                                "name": tool_name,
+                                "id": tool_use_id,
+                                "input_preview": _tool_input_preview(tool_name, getattr(block, "input", {})),
                             }
                         )
                     elif hasattr(block, "thinking"):
@@ -1938,7 +1963,9 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
                     pass
                 elif message.subtype == "task_notification" and isinstance(safe_data, dict):
                     task_id = str(safe_data.get("task_id") or "")
-                    tool_use_id = str(safe_data.get("tool_use_id") or async_subagent_task_ids.pop(task_id, ""))
+                    tool_use_id = str(safe_data.get("tool_use_id") or async_subagent_task_ids.get(task_id, ""))
+                    if tool_use_id and task_id:
+                        async_subagent_task_ids[task_id] = tool_use_id
                     terminal_status = str(safe_data.get("status") or "").lower()
                     if tool_use_id and terminal_status in {"completed", "failed", "cancelled", "canceled"}:
                         pending_async_subagent_tool_ids.discard(tool_use_id)

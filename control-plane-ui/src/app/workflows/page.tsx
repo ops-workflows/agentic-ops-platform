@@ -1,17 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Workflow } from 'lucide-react';
 import {
   type Agent,
   apiFetch,
   type WorkflowRepoStatus,
   type WorkflowRepoVersion,
 } from '@/lib/api';
-import {
-  getAgentModelBadgeClasses,
-  getAgentModelInfo,
-} from '@/lib/agent-model';
+import { WorkflowsListSection } from '@/components/workflows-list-section';
+import { ExpandableMeta } from '@/components/expandable-meta';
+import { formatWorkflowDate } from '@/lib/workflow-format';
 
 export default function AgentsPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -79,105 +77,14 @@ export default function AgentsPage() {
         </div>
       </section>
 
-      <h2 className="text-lg font-medium text-[var(--color-text-primary)]">
-        Workflows
-      </h2>
-
-      {loading ? (
-        <p className="text-[var(--color-text-tertiary)]">
-          Loading workflows...
-        </p>
-      ) : agents.length === 0 ? (
-        <p className="text-[var(--color-text-tertiary)]">No workflows found.</p>
-      ) : (
-        <div className="grid gap-4 lg:grid-cols-2">
-          {agents.map((agent) => {
-            const modelInfo = getAgentModelInfo(agent.config);
-
-            return (
-              <div
-                key={agent.id}
-                className="group rounded-card border border-ops-border bg-ops-surface p-6 no-underline transition-all duration-200 hover:border-[var(--color-accent)]/30 hover:shadow-card-hover"
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div className="space-y-3 min-w-0 flex-1">
-                    <div className="flex items-center gap-3">
-                      <WorkflowIcon />
-                      <div className="min-w-0">
-                        <div className="text-base font-medium text-[var(--color-text-primary)]">
-                          {agent.name}
-                        </div>
-                        <div className="text-[10px] text-[var(--color-text-tertiary)]">
-                          v{agent.version || '0.0'}
-                        </div>
-                      </div>
-                    </div>
-                    <p className="text-sm leading-6 text-[var(--color-text-secondary)]">
-                      {agent.description || 'No description provided.'}
-                    </p>
-                  </div>
-                  <div className="flex flex-shrink-0 items-center gap-2">
-                    {modelInfo && (
-                      <span
-                        className={`rounded-full border px-2.5 py-0.5 text-[10px] font-medium ${getAgentModelBadgeClasses(modelInfo.tone)}`}
-                      >
-                        {modelInfo.label}
-                      </span>
-                    )}
-                    <span
-                      className={`rounded-full border px-2.5 py-0.5 text-[10px] font-medium ${agent.paused ? 'border-[var(--color-warning)]/20 bg-[var(--color-warning-muted)] text-[var(--color-warning)]' : 'border-[var(--color-success)]/20 bg-[var(--color-success-muted)] text-[var(--color-success)]'}`}
-                    >
-                      {agent.paused ? 'Paused' : 'Active'}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="mt-5 grid gap-2 sm:grid-cols-3">
-                  <MetaPill label="Path" value={agent.repo_path || 'n/a'} />
-                  <MetaPill
-                    label="Updated"
-                    value={new Date(agent.updated).toLocaleDateString()}
-                  />
-                  <MetaPill
-                    label="Schedules"
-                    value={String(
-                      (
-                        ((agent.config as Record<string, unknown>).schedules as
-                          | Array<unknown>
-                          | undefined) || []
-                      ).length,
-                    )}
-                  />
-                </div>
-
-                <div className="mt-5 flex items-center justify-between">
-                  <button
-                    type="button"
-                    onClick={() => toggleAgentPaused(agent)}
-                    disabled={togglingAgent === agent.id}
-                    className={`rounded-btn px-3 py-1.5 text-xs font-medium transition-all ${agent.paused ? 'border border-[var(--color-success)]/20 bg-[var(--color-success-muted)] text-[var(--color-success)] hover:bg-[var(--color-success)]/20' : 'border border-[var(--color-warning)]/20 bg-[var(--color-warning-muted)] text-[var(--color-warning)] hover:bg-[var(--color-warning)]/20'} disabled:cursor-not-allowed disabled:opacity-50`}
-                  >
-                    {togglingAgent === agent.id
-                      ? agent.paused
-                        ? 'Resuming…'
-                        : 'Pausing…'
-                      : agent.paused
-                        ? 'Resume'
-                        : 'Pause'}
-                  </button>
-                  <a
-                    href={`/workflows/${agent.name}`}
-                    className="rounded-btn border border-ops-border bg-ops-surface px-4 py-2 text-sm text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-accent)]/30 hover:text-[var(--color-text-primary)]"
-                  >
-                    Open workflow
-                  </a>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
       <WorkflowRepoSyncSection />
+
+      <WorkflowsListSection
+        agents={agents}
+        loading={loading}
+        togglingAgent={togglingAgent}
+        onToggleAgentPaused={toggleAgentPaused}
+      />
     </div>
   );
 }
@@ -253,13 +160,16 @@ function WorkflowRepoSyncSection() {
   }
 
   const bundleErrorEntries = status ? Object.entries(status.bundle_errors) : [];
+  const activeRef = status
+    ? status.last_synced_ref || status.pinned_ref || status.default_ref || '-'
+    : '-';
 
   return (
     <section className="border-t border-ops-border pt-8">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-lg font-medium text-[var(--color-text-primary)]">
-            Workflow Sync
+            Sync
           </h2>
           <p className="mt-1 text-sm text-[var(--color-text-tertiary)]">
             Activate workflow bundles and repo-owned task settings for new
@@ -286,145 +196,115 @@ function WorkflowRepoSyncSection() {
       ) : null}
 
       {!loading && status ? (
-        <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
-          <article className="rounded-card border border-ops-border bg-ops-surface p-5">
+        <article className="mt-4 rounded-card border border-ops-border bg-ops-surface p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <h3 className="text-base font-medium text-[var(--color-text-primary)]">
-              Source
+              Workflow Repository
             </h3>
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              <WorkflowRepoMeta label="Mode" value={status.source_mode} />
-              <WorkflowRepoMeta
-                label="URL"
-                value={status.source_url || 'Local checkout'}
-              />
-              <WorkflowRepoMeta
-                label="Default ref"
-                value={status.default_ref || '-'}
-              />
-              <WorkflowRepoMeta
-                label="Pinned ref"
-                value={status.pinned_ref || 'Not pinned'}
-              />
-            </div>
-            {status.source_mode === 'remote' ? (
-              <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center">
-                <select
-                  value={selectedRef}
-                  onChange={(event) => setSelectedRef(event.target.value)}
-                  className="rounded-btn border border-ops-border bg-ops-surface-raised px-3 py-2 text-sm text-[var(--color-text-primary)]"
-                >
-                  {status.default_ref ? (
-                    <option value={status.default_ref}>
-                      {status.default_ref} (default)
-                    </option>
-                  ) : null}
-                  {versions.map((version) => (
-                    <option key={version.name} value={version.name}>
-                      {version.name}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={handlePin}
-                  disabled={pinning || !selectedRef}
-                  className="rounded-btn border border-ops-border bg-ops-surface px-4 py-2 text-sm text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-accent)]/30 hover:text-[var(--color-text-primary)] disabled:opacity-50"
-                >
-                  {pinning ? 'Pinning...' : 'Pin version'}
-                </button>
-              </div>
-            ) : (
-              <p className="mt-4 text-sm text-[var(--color-text-tertiary)]">
-                Running from a local workflow checkout.
-              </p>
-            )}
-          </article>
-
-          <article className="rounded-card border border-ops-border bg-ops-surface p-5">
-            <h3 className="text-base font-medium text-[var(--color-text-primary)]">
-              Last Sync
-            </h3>
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              <WorkflowRepoMeta
-                label="Status"
-                value={status.last_sync_status || 'Never synced'}
-              />
-              <WorkflowRepoMeta
-                label="Synced ref"
-                value={status.last_synced_ref || '-'}
-              />
-              <WorkflowRepoMeta
-                label="Commit"
-                value={
-                  status.last_synced_commit
-                    ? status.last_synced_commit.slice(0, 12)
-                    : '-'
-                }
-              />
-              <WorkflowRepoMeta
-                label="Synced at"
-                value={status.last_synced_at || '-'}
-              />
-            </div>
-            {status.last_sync_error ? (
-              <p className="mt-4 text-sm text-[var(--color-error)]">
-                {status.last_sync_error}
-              </p>
-            ) : null}
-            <div className="mt-4">
-              <div className="text-[10px] uppercase tracking-[0.12em] text-[var(--color-text-tertiary)]">
-                Discovered workflows
-              </div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {status.discovered_workflows.map((workflow) => (
-                  <span
-                    key={workflow}
-                    className="rounded-full bg-[var(--color-info-muted)] px-2.5 py-1 text-[10px] uppercase tracking-[0.12em] text-[var(--color-info)]"
-                  >
-                    {workflow}
-                  </span>
-                ))}
-                {status.discovered_workflows.length === 0 ? (
-                  <span className="text-sm text-[var(--color-text-tertiary)]">
-                    None discovered yet.
-                  </span>
+            <SyncStatusBadge status={status.last_sync_status} />
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <ExpandableMeta
+              label={
+                status.source_mode === 'remote' ? 'Source' : 'Local source'
+              }
+              value={
+                status.source_mode === 'remote'
+                  ? status.source_url || 'Not configured'
+                  : status.source_path || 'Local checkout'
+              }
+            />
+            <ExpandableMeta label="Active ref" value={activeRef} />
+            <ExpandableMeta
+              label="Commit"
+              value={status.last_synced_commit || '-'}
+            />
+            <ExpandableMeta
+              label="Synced at"
+              value={formatWorkflowEventDate(status.last_synced_at)}
+            />
+          </div>
+          {status.source_mode === 'remote' ? (
+            <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center">
+              <select
+                value={selectedRef}
+                onChange={(event) => setSelectedRef(event.target.value)}
+                className="rounded-btn border border-ops-border bg-ops-surface-raised px-3 py-2 text-sm text-[var(--color-text-primary)]"
+              >
+                {status.default_ref ? (
+                  <option value={status.default_ref}>
+                    {status.default_ref} (default)
+                  </option>
                 ) : null}
-              </div>
+                {versions.map((version) => (
+                  <option key={version.name} value={version.name}>
+                    {version.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={handlePin}
+                disabled={pinning || !selectedRef}
+                className="rounded-btn border border-ops-border bg-ops-surface px-4 py-2 text-sm text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-accent)]/30 hover:text-[var(--color-text-primary)] disabled:opacity-50"
+              >
+                {pinning ? 'Pinning...' : 'Pin version'}
+              </button>
             </div>
-            {bundleErrorEntries.length > 0 ? (
-              <div className="mt-4">
-                <div className="text-[10px] uppercase tracking-[0.12em] text-[var(--color-error)]">
-                  Bundle errors
-                </div>
-                <ul className="mt-2 space-y-1">
-                  {bundleErrorEntries.map(([workflow, message]) => (
-                    <li
-                      key={workflow}
-                      className="text-sm text-[var(--color-error)]"
-                    >
-                      <span className="font-medium">{workflow}</span>: {message}
-                    </li>
-                  ))}
-                </ul>
+          ) : null}
+          {status.last_sync_error ? (
+            <p className="mt-4 text-sm text-[var(--color-error)]">
+              {status.last_sync_error}
+            </p>
+          ) : null}
+          {bundleErrorEntries.length > 0 ? (
+            <div className="mt-4">
+              <div className="text-[10px] uppercase tracking-[0.12em] text-[var(--color-error)]">
+                Bundle errors
               </div>
-            ) : null}
-          </article>
-        </div>
+              <ul className="mt-2 space-y-1">
+                {bundleErrorEntries.map(([workflow, message]) => (
+                  <li
+                    key={workflow}
+                    className="text-sm text-[var(--color-error)]"
+                  >
+                    <span className="font-medium">{workflow}</span>: {message}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </article>
       ) : null}
     </section>
   );
 }
 
-function WorkflowRepoMeta({ label, value }: { label: string; value: string }) {
+function formatWorkflowEventDate(value: string | null): string {
+  if (!value) return 'Never synced';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return `${formatWorkflowDate(value)} · ${date.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })}`;
+}
+
+function SyncStatusBadge({ status }: { status: string | null }) {
+  const tone =
+    status === 'ok'
+      ? 'text-[var(--color-success)]'
+      : status?.includes('error')
+        ? 'text-[var(--color-error)]'
+        : 'text-[var(--color-text-tertiary)]';
+
   return (
-    <div className="rounded-btn border border-ops-border-subtle bg-ops-bg px-3 py-2.5">
-      <div className="text-[10px] uppercase tracking-[0.12em] text-[var(--color-text-tertiary)]">
-        {label}
-      </div>
-      <div className="mt-1 break-words text-sm text-[var(--color-text-secondary)]">
-        {value}
-      </div>
-    </div>
+    <span
+      className={`border border-current/40 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.12em] ${tone}`}
+    >
+      {status || 'Never synced'}
+    </span>
   );
 }
 
@@ -437,30 +317,6 @@ function StatCard({ label, value }: { label: string; value: string | number }) {
       <div className="mt-2 text-2xl font-medium text-[var(--color-text-primary)]">
         {value}
       </div>
-    </div>
-  );
-}
-
-function MetaPill({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-[10px] border border-ops-border-subtle bg-ops-bg px-3 py-2.5">
-      <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--color-text-tertiary)]">
-        {label}
-      </div>
-      <div
-        className="mt-1 truncate text-sm text-[var(--color-text-secondary)]"
-        title={value}
-      >
-        {value}
-      </div>
-    </div>
-  );
-}
-
-function WorkflowIcon() {
-  return (
-    <div className="flex h-9 w-9 flex-none items-center justify-center rounded-[10px] border border-ops-border bg-ops-surface-raised text-[var(--color-accent)]">
-      <Workflow aria-hidden="true" size={19} strokeWidth={1.8} />
     </div>
   );
 }

@@ -102,6 +102,19 @@ async def test_dequeue_respects_platform_running_limit(db_session) -> None:
 
 
 @pytest.mark.asyncio
+async def test_global_dequeue_with_no_eligible_workflows_claims_nothing(db_session) -> None:
+    await create_task(db_session, workflow="paused-workflow", prompt="waiting")
+
+    task = await dequeue_task(
+        db_session,
+        platform_max_running=3,
+        workflow_limits={},
+    )
+
+    assert task is None
+
+
+@pytest.mark.asyncio
 async def test_global_dequeue_respects_each_workflow_limit(db_session) -> None:
     await create_task(db_session, workflow="workflow-a", prompt="first")
     await create_task(db_session, workflow="workflow-a", prompt="second")

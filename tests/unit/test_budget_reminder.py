@@ -184,6 +184,30 @@ def test_subagent_no_output_retry_text():
     assert "narrower" in text.lower()
 
 
+def test_send_message_to_completed_subagent_is_a_resume():
+    sep = _get_sep()
+    task_owners = {"child-task": "original-agent-tool"}
+
+    assert (
+        sep._resumed_subagent_recipient(
+            "SendMessage",
+            {"recipient": "child-task"},
+            task_owners,
+            set(),
+        )
+        == "child-task"
+    )
+    assert (
+        sep._resumed_subagent_recipient(
+            "SendMessage",
+            {"recipient": "child-task"},
+            task_owners,
+            {"original-agent-tool"},
+        )
+        is None
+    )
+
+
 # ── AskUserQuestion response parsing ─────────────────────────────────────
 
 

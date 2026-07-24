@@ -139,6 +139,7 @@ services:
       PLATFORM_CONFIG_FILE: /app/platform-config.yaml
       WORKFLOW_ROOT: /app/workflows
       WORKFLOW_REPO_PATHS: ${WORKFLOW_REPO_PATHS:-/app/workflows}
+      WORKFLOW_REPO_DISPLAY_PATH: ${HOST_WORKFLOW_REPO_PATH:-}
       RUNTIME_BUNDLE_ROOT: ${RUNTIME_BUNDLE_ROOT:-/tmp/agentic-ops-runtime-bundles}
     volumes:
       - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro

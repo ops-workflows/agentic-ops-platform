@@ -6,6 +6,7 @@ import {
   getAgentModelBadgeClasses,
   getAgentModelInfo,
 } from '@/lib/agent-model';
+import { SyntaxCode } from '@/components/content-preview';
 import { PluginPreview } from '@/components/plugin-preview';
 import { useParams } from 'next/navigation';
 
@@ -97,13 +98,13 @@ export default function AgentDetailPage() {
             <div className="flex items-center gap-2">
               {modelInfo && (
                 <span
-                  className={`rounded-full border px-2.5 py-0.5 text-[10px] font-medium ${getAgentModelBadgeClasses(modelInfo.tone)}`}
+                  className={`border px-2 py-1 text-[10px] font-bold uppercase tracking-[0.12em] ${getAgentModelBadgeClasses(modelInfo.tone)}`}
                 >
                   {modelInfo.label}
                 </span>
               )}
               <span
-                className={`rounded-full border px-2.5 py-0.5 text-[10px] font-medium ${agent.paused ? 'border-[var(--color-warning)]/20 bg-[var(--color-warning-muted)] text-[var(--color-warning)]' : 'border-[var(--color-success)]/20 bg-[var(--color-success-muted)] text-[var(--color-success)]'}`}
+                className={`border border-current/40 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.12em] ${agent.paused ? 'text-[var(--color-warning)]' : 'text-[var(--color-success)]'}`}
               >
                 {agent.paused ? 'Paused' : 'Active'}
               </span>
@@ -148,9 +149,11 @@ export default function AgentDetailPage() {
 
       {tab === 'config' && (
         <div className="bg-ops-surface border border-ops-border rounded-card p-5">
-          <pre className="text-sm text-[var(--color-text-secondary)] overflow-auto max-h-[600px] font-mono">
-            {JSON.stringify(config, null, 2)}
-          </pre>
+          <SyntaxCode
+            code={JSON.stringify(config, null, 2)}
+            language="json"
+            className="max-h-[600px] overflow-auto text-sm leading-relaxed"
+          />
         </div>
       )}
 

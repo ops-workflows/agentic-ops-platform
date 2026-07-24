@@ -15,7 +15,6 @@
 
 name: "{WORKFLOW_NAME}"
 description: "{Brief description of what this workflow does}"
-version: "1.0.0"
 
 session:
   max_turns: 50

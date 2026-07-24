@@ -2,6 +2,11 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
+import {
+  MarkdownPreview,
+  SyntaxCode,
+  type CodeLanguage,
+} from '@/components/content-preview';
 
 interface ParsedAgentDefinition {
   path: string;
@@ -198,6 +203,12 @@ function fileTypeLabel(path: string): string {
   return 'file';
 }
 
+function fileLanguage(path: string): CodeLanguage {
+  if (path.endsWith('.json')) return 'json';
+  if (path.endsWith('.yaml') || path.endsWith('.yml')) return 'yaml';
+  return 'text';
+}
+
 function mcpDetailsHref(serverId: string): string {
   return `/mcp?server=${encodeURIComponent(serverId)}`;
 }
@@ -299,9 +310,7 @@ export function PluginPreview({
         </div>
       </div>
 
-      <div
-        className={`grid grid-cols-1 ${showFiles ? 'xl:grid-cols-2' : ''} gap-4`}
-      >
+      <div className="space-y-4">
         <div className="bg-ops-surface border border-ops-border rounded-card p-5">
           <h4 className="font-medium text-[var(--color-text-primary)] mb-3">
             Workflow Graph
@@ -389,36 +398,42 @@ export function PluginPreview({
                 {filePaths.length} files
               </span>
             </div>
-            <div className="flex flex-col sm:grid sm:grid-cols-[180px_1fr] lg:grid-cols-[200px_1fr] min-h-[240px] sm:min-h-[300px] max-h-[400px]">
-              <div className="border-b sm:border-b-0 sm:border-r border-ops-border overflow-x-auto sm:overflow-y-auto">
-                <div className="flex sm:flex-col">
+            <div className="flex h-[min(68vh,560px)] min-h-[360px] flex-col sm:grid sm:grid-cols-[180px_1fr] lg:grid-cols-[200px_1fr]">
+              <div className="max-h-44 flex-none overflow-y-auto border-b border-ops-border sm:max-h-none sm:min-h-0 sm:border-b-0 sm:border-r">
+                <div className="flex flex-col">
                   {filePaths.map((path) => (
                     <button
                       key={path}
                       onClick={() => setSelectedPath(path)}
-                      className={`flex-shrink-0 sm:w-full text-left px-3 py-2.5 border-r sm:border-r-0 sm:border-b border-ops-border/50 hover:bg-ops-surface-raised transition-colors ${
+                      className={`w-full text-left px-3 py-2.5 border-b border-ops-border/50 hover:bg-ops-surface-raised transition-colors ${
                         selectedPath === path ? 'bg-ops-surface-raised' : ''
                       }`}
                     >
-                      <div className="text-sm text-[var(--color-text-secondary)] break-all whitespace-nowrap sm:whitespace-normal">
+                      <div className="text-sm text-[var(--color-text-secondary)] break-all">
                         {path}
                       </div>
-                      <div className="text-[10px] uppercase tracking-wide text-[var(--color-text-tertiary)] mt-1 hidden sm:block">
+                      <div className="text-[10px] uppercase tracking-wide text-[var(--color-text-tertiary)] mt-1">
                         {fileTypeLabel(path)}
                       </div>
                     </button>
                   ))}
                 </div>
               </div>
-              <div className="overflow-auto p-4">
+              <div className="min-h-0 flex-1 overflow-auto p-4 sm:flex-none">
                 {selectedPath ? (
                   <>
                     <div className="text-xs text-[var(--color-text-tertiary)] mb-2">
                       {selectedPath}
                     </div>
-                    <pre className="text-xs text-[var(--color-text-secondary)] whitespace-pre-wrap break-words font-mono">
-                      {allFiles[selectedPath]}
-                    </pre>
+                    {selectedPath.endsWith('.md') ? (
+                      <MarkdownPreview body={allFiles[selectedPath] || ''} />
+                    ) : (
+                      <SyntaxCode
+                        code={allFiles[selectedPath] || ''}
+                        language={fileLanguage(selectedPath)}
+                        className="min-w-max text-xs leading-relaxed"
+                      />
+                    )}
                   </>
                 ) : (
                   <div className="text-sm text-[var(--color-text-tertiary)]">

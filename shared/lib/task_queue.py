@@ -173,7 +173,7 @@ async def dequeue_task(
         if running_count >= max_running:
             return None
 
-    if workflow_limits and not tuple(workflow_limits):
+    if workflow_limits is not None and not workflow_limits:
         return None
 
     blocked_workflows: set[str] = set()

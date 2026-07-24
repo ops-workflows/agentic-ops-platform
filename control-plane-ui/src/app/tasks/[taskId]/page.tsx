@@ -26,9 +26,7 @@ import {
   XCircle,
   type LucideIcon,
 } from 'lucide-react';
-import { Highlight, themes } from 'prism-react-renderer';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { MarkdownPreview, SyntaxCode } from '@/components/content-preview';
 import {
   apiFetch,
   type SessionDetail,
@@ -1168,28 +1166,11 @@ function JsonCode({
   compact?: boolean;
 }) {
   return (
-    <Highlight code={body} language="json" theme={themes.vsDark}>
-      {({ className, getLineProps, getTokenProps, style, tokens }) => (
-        <pre
-          className={`${className} overflow-auto ${compact ? 'max-h-48 px-0 text-[10px]' : 'max-h-[400px] p-3 text-[13px]'} leading-relaxed`}
-          style={{ ...style, background: 'transparent' }}
-        >
-          {tokens.map((line, lineIndex) => (
-            <div
-              {...getLineProps({ line })}
-              key={`line-${lineIndex}-${line.join('')}`}
-            >
-              {line.map((token, tokenIndex) => (
-                <span
-                  {...getTokenProps({ token })}
-                  key={`token-${tokenIndex}-${token.content}`}
-                />
-              ))}
-            </div>
-          ))}
-        </pre>
-      )}
-    </Highlight>
+    <SyntaxCode
+      code={body}
+      language="json"
+      className={`overflow-auto ${compact ? 'max-h-48 px-0 text-[10px]' : 'max-h-[400px] p-3 text-[13px]'} leading-relaxed`}
+    />
   );
 }
 
@@ -1201,56 +1182,10 @@ function TraceBody({ body }: { body: string }) {
   }
 
   return (
-    <div className="max-h-[400px] overflow-auto px-3 py-2 text-[13px] leading-relaxed text-[var(--color-text-secondary)]">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          a: ({ children, href }) => (
-            <a
-              className="text-[var(--color-info)] underline underline-offset-2"
-              href={href}
-              rel="noreferrer"
-              target="_blank"
-            >
-              {children}
-            </a>
-          ),
-          code: ({ children }) => (
-            <code className="rounded bg-ops-surface-raised px-1 py-0.5 font-mono text-[12px]">
-              {children}
-            </code>
-          ),
-          h1: ({ children }) => (
-            <h1 className="mb-2 text-lg font-semibold text-[var(--color-text-primary)]">
-              {children}
-            </h1>
-          ),
-          h2: ({ children }) => (
-            <h2 className="mb-2 text-base font-semibold text-[var(--color-text-primary)]">
-              {children}
-            </h2>
-          ),
-          h3: ({ children }) => (
-            <h3 className="mb-1 text-sm font-semibold text-[var(--color-text-primary)]">
-              {children}
-            </h3>
-          ),
-          li: ({ children }) => <li className="ml-5 list-disc">{children}</li>,
-          ol: ({ children }) => <ol className="my-2">{children}</ol>,
-          p: ({ children }) => (
-            <p className="my-2 first:mt-0 last:mb-0">{children}</p>
-          ),
-          pre: ({ children }) => (
-            <pre className="my-2 overflow-auto rounded bg-ops-surface-raised p-2 font-mono text-[12px]">
-              {children}
-            </pre>
-          ),
-          ul: ({ children }) => <ul className="my-2">{children}</ul>,
-        }}
-      >
-        {body}
-      </ReactMarkdown>
-    </div>
+    <MarkdownPreview
+      body={body}
+      className="max-h-[400px] overflow-auto px-3 py-2"
+    />
   );
 }
 
