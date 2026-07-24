@@ -60,6 +60,7 @@ class Settings(
     gateway_host: str = "0.0.0.0"  # noqa: S104
     gateway_port: int = 8080
     poll_interval_sec: int = 2
+    platform_max_running_tasks: int = 3
     workflow_root: str = "/app/workflows"
     repo_path: str = ""
     host_repo_root: str = ""
@@ -121,6 +122,21 @@ class Settings(
 settings = Settings()
 
 
+def _apply_platform_overrides(target: Settings, loaded: dict[str, str]) -> None:
+    """Apply repo config values while preserving Pydantic field types."""
+    overrides = {
+        env_var.lower(): value
+        for env_var, value in loaded.items()
+        if env_var.lower() in target.__class__.model_fields and not os.environ.get(env_var)
+    }
+    if not overrides:
+        return
+
+    validated = target.__class__.model_validate({**target.model_dump(), **overrides})
+    for field_name in overrides:
+        setattr(target, field_name, getattr(validated, field_name))
+
+
 def _apply_platform_secret_defaults() -> None:
     """Overlay repo-stored platform config onto settings unless env explicitly set it."""
     platform_file = settings.platform_config_file or settings.platform_secrets_file
@@ -128,13 +144,7 @@ def _apply_platform_secret_defaults() -> None:
         return
 
     loaded = load_platform_env(platform_file, identity=settings.age_identity or None)
-    for env_var, value in loaded.items():
-        field_name = env_var.lower()
-        if not hasattr(settings, field_name):
-            continue
-        if os.environ.get(env_var):
-            continue
-        setattr(settings, field_name, value)
+    _apply_platform_overrides(settings, loaded)
 
 
 _apply_platform_secret_defaults()

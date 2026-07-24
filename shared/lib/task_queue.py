@@ -10,7 +10,7 @@ import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import case, func, or_, select, text, update
+from sqlalchemy import case, func, literal, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shared.lib.models import Agent, Approval, Session, SessionEvent, Task, TaskEvent
@@ -144,11 +144,26 @@ async def dequeue_task(
     *,
     workflow: str | None = None,
     max_running: int | None = None,
+    platform_max_running: int | None = None,
+    workflow_limits: dict[str, int] | None = None,
+    workflow_priorities: dict[str, int] | None = None,
 ) -> Task | None:
     """Dequeue the next queued task using SKIP LOCKED.
 
-    If max_running is specified, checks concurrency limits before dequeuing.
+    ``max_running`` limits one selected workflow. ``platform_max_running``
+    limits all running tasks. ``workflow_limits`` and ``workflow_priorities``
+    select one eligible workflow task globally, ordered by resumptions, then
+    priority, then FIFO order.
     """
+    if platform_max_running is not None:
+        if platform_max_running < 1:
+            raise ValueError("platform_max_running must be at least 1")
+        # Serialize the count-and-claim step across session-manager replicas.
+        await session.execute(text("SELECT pg_advisory_xact_lock(8142301)"))
+        running_count = await session.scalar(select(func.count()).select_from(Task).where(Task.status == "running"))
+        if int(running_count or 0) >= platform_max_running:
+            return None
+
     if max_running is not None:
         count_q = select(text("count(*)")).select_from(Task).where(Task.status == "running")
         if workflow:
@@ -158,20 +173,44 @@ async def dequeue_task(
         if running_count >= max_running:
             return None
 
-    query = (
-        select(Task)
-        .where(Task.status.in_(RUNNABLE_STATUSES), Task.archived_at.is_(None))
-        .order_by(case((Task.status == "resume_pending", 0), else_=1), Task.created)
-        .limit(1)
-        .with_for_update(skip_locked=True)
-    )
-    if workflow:
-        query = query.where(Task.workflow == workflow)
+    if workflow_limits and not tuple(workflow_limits):
+        return None
 
-    result = await session.execute(query)
-    task = result.scalar_one_or_none()
+    blocked_workflows: set[str] = set()
+    while True:
+        query = (
+            select(Task)
+            .where(Task.status.in_(RUNNABLE_STATUSES), Task.archived_at.is_(None))
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+        if workflow:
+            query = query.where(Task.workflow == workflow)
+        if workflow_limits:
+            query = query.where(Task.workflow.in_(tuple(workflow_limits)))
+        if blocked_workflows:
+            query = query.where(Task.workflow.not_in(blocked_workflows))
 
-    if task:
+        priority_order = case(workflow_priorities, value=Task.workflow, else_=1) if workflow_priorities else literal(1)
+        query = query.order_by(
+            case((Task.status == "resume_pending", 0), else_=1),
+            priority_order,
+            Task.created,
+        )
+        result = await session.execute(query)
+        task = result.scalar_one_or_none()
+        if task is None:
+            return None
+
+        workflow_limit = workflow_limits.get(task.workflow) if workflow_limits else None
+        if workflow_limit is not None:
+            workflow_running_count = await session.scalar(
+                select(func.count()).select_from(Task).where(Task.status == "running", Task.workflow == task.workflow)
+            )
+            if int(workflow_running_count or 0) >= workflow_limit:
+                blocked_workflows.add(task.workflow)
+                continue
+
         prior_status = task.status
         task.status = "running"
         task.heartbeat = datetime.now(UTC)
@@ -186,7 +225,7 @@ async def dequeue_task(
         )
         await session.commit()
         logger.info("Dequeued task %s (workflow=%s)", task.id, task.workflow)
-    return task
+        return task
 
 
 async def heartbeat(session: AsyncSession, task_id: uuid.UUID) -> None:

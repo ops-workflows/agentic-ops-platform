@@ -30,9 +30,18 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 _shutdown = False
-_plugin_worker_cache: list[tuple[str, int]] = []
+_plugin_worker_cache: dict[str, tuple[int, int]] = {}
 _plugin_worker_cache_loaded_at = 0.0
 _PLUGIN_SCAN_INTERVAL_SEC = 30.0
+
+_WORKFLOW_PRIORITY = {"high": 0, "medium": 1, "low": 2}
+
+
+def _workflow_priority(config: dict) -> int:
+    value = config.get("runtime", {}).get("priority", "medium")
+    if isinstance(value, int) and value in (1, 2, 3):
+        return value - 1
+    return _WORKFLOW_PRIORITY.get(str(value).strip().lower(), _WORKFLOW_PRIORITY["medium"])
 
 
 def _signal_handler(sig, frame):
@@ -41,18 +50,18 @@ def _signal_handler(sig, frame):
     _shutdown = True
 
 
-def _refresh_plugin_worker_cache(force: bool = False) -> list[tuple[str, int]]:
-    """Refresh workflow concurrency limits at a bounded cadence."""
+def _refresh_plugin_worker_cache(force: bool = False) -> dict[str, tuple[int, int]]:
+    """Refresh workflow concurrency caps and queue priorities at a bounded cadence."""
     global _plugin_worker_cache, _plugin_worker_cache_loaded_at
 
     now = time.monotonic()
     if not force and _plugin_worker_cache and now - _plugin_worker_cache_loaded_at < _PLUGIN_SCAN_INTERVAL_SEC:
         return _plugin_worker_cache
 
-    plugins: list[tuple[str, int]] = []
+    plugins: dict[str, tuple[int, int]] = {}
     for workflow, config in discover_all_plugin_configs():
         max_workers = config.get("runtime", {}).get("parallel_workers", 1)
-        plugins.append((workflow, max_workers))
+        plugins[workflow] = (max(1, int(max_workers)), _workflow_priority(config))
 
     _plugin_worker_cache = plugins
     _plugin_worker_cache_loaded_at = now
@@ -75,14 +84,19 @@ async def queue_consumer_loop() -> None:
                     for name, provisioned, paused in result.all()
                 }
 
-                task = None
-                for workflow, max_workers in plugins:
-                    workflow_state = agent_state.get(workflow)
-                    if workflow_state and (not workflow_state["provisioned"] or workflow_state["paused"]):
-                        continue
-                    task = await dequeue_task(session, workflow=workflow, max_running=max_workers)
-                    if task:
-                        break
+                enabled_plugins = {
+                    workflow: settings_for_workflow
+                    for workflow, settings_for_workflow in plugins.items()
+                    if (workflow_state := agent_state.get(workflow))
+                    and workflow_state["provisioned"]
+                    and not workflow_state["paused"]
+                }
+                task = await dequeue_task(
+                    session,
+                    platform_max_running=settings.platform_max_running_tasks,
+                    workflow_limits={workflow: values[0] for workflow, values in enabled_plugins.items()},
+                    workflow_priorities={workflow: values[1] for workflow, values in enabled_plugins.items()},
+                )
 
             if task:
                 logger.info("Dequeued task %s (workflow=%s)", task.id, task.workflow)

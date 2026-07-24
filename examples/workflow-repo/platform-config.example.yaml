@@ -25,6 +25,9 @@ config:
 
   CONTROL_PLANE_UI_URL: http://localhost:3000
   GATEWAY_PUBLIC_BASE_URL: http://localhost:8080
+  # Caps concurrently admitted parent tasks across every workflow. This does
+  # not cap concurrent subagent/model calls within a running task.
+  PLATFORM_MAX_RUNNING_TASKS: "3"
 
 mcps:
   enabled:

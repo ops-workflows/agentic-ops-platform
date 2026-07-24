@@ -82,6 +82,111 @@ async def test_dequeue_respects_max_running(db_session) -> None:
 
 
 @pytest.mark.asyncio
+async def test_dequeue_respects_platform_running_limit(db_session) -> None:
+    await create_task(db_session, workflow="workflow-a", prompt="first")
+    await create_task(db_session, workflow="workflow-b", prompt="second")
+
+    first = await dequeue_task(
+        db_session,
+        platform_max_running=1,
+        workflow_limits={"workflow-a": 1, "workflow-b": 1},
+    )
+    second = await dequeue_task(
+        db_session,
+        platform_max_running=1,
+        workflow_limits={"workflow-a": 1, "workflow-b": 1},
+    )
+
+    assert first is not None
+    assert second is None
+
+
+@pytest.mark.asyncio
+async def test_global_dequeue_respects_each_workflow_limit(db_session) -> None:
+    await create_task(db_session, workflow="workflow-a", prompt="first")
+    await create_task(db_session, workflow="workflow-a", prompt="second")
+
+    first = await dequeue_task(
+        db_session,
+        platform_max_running=3,
+        workflow_limits={"workflow-a": 1},
+    )
+    second = await dequeue_task(
+        db_session,
+        platform_max_running=3,
+        workflow_limits={"workflow-a": 1},
+    )
+
+    assert first is not None
+    assert second is None
+
+
+@pytest.mark.asyncio
+async def test_global_dequeue_respects_workflow_limit_across_sessions(async_engine) -> None:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    factory = async_sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as setup:
+        await create_task(setup, workflow="workflow-a", prompt="first")
+        await create_task(setup, workflow="workflow-a", prompt="second")
+
+    kwargs = {
+        "platform_max_running": 3,
+        "workflow_limits": {"workflow-a": 1},
+    }
+    async with factory() as first_session:
+        first = await dequeue_task(first_session, **kwargs)
+    async with factory() as second_session:
+        second = await dequeue_task(second_session, **kwargs)
+
+    assert first is not None
+    assert second is None
+
+
+@pytest.mark.asyncio
+async def test_global_dequeue_skips_capped_workflow_for_next_priority(db_session) -> None:
+    await create_task(db_session, workflow="high-workflow", prompt="running")
+    await create_task(db_session, workflow="high-workflow", prompt="queued")
+    await create_task(db_session, workflow="low-workflow", prompt="queued")
+    first = await dequeue_task(
+        db_session,
+        platform_max_running=3,
+        workflow_limits={"high-workflow": 1, "low-workflow": 1},
+        workflow_priorities={"high-workflow": 0, "low-workflow": 2},
+    )
+
+    assert first is not None
+    assert first.workflow == "high-workflow"
+
+    second = await dequeue_task(
+        db_session,
+        platform_max_running=3,
+        workflow_limits={"high-workflow": 1, "low-workflow": 1},
+        workflow_priorities={"high-workflow": 0, "low-workflow": 2},
+    )
+
+    assert second is not None
+    assert second.workflow == "low-workflow"
+
+
+@pytest.mark.asyncio
+async def test_dequeue_prefers_higher_workflow_priority(db_session) -> None:
+    low = await create_task(db_session, workflow="low-workflow", prompt="low")
+    high = await create_task(db_session, workflow="high-workflow", prompt="high")
+
+    task = await dequeue_task(
+        db_session,
+        platform_max_running=3,
+        workflow_limits={"low-workflow": 1, "high-workflow": 1},
+        workflow_priorities={"low-workflow": 2, "high-workflow": 0},
+    )
+
+    assert task is not None
+    assert task.id == high.id
+    assert task.id != low.id
+
+
+@pytest.mark.asyncio
 async def test_dequeue_skips_locked_across_connections(async_engine) -> None:
     """Two concurrent sessions must not receive the same task (SKIP LOCKED)."""
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker

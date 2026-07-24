@@ -98,6 +98,48 @@ workflow bundles and agent-memory backups across supported deployment targets.
 | `GATEWAY_PUBLIC_BASE_URL` | `""` | Publicly reachable gateway URL (message-bus webhook callbacks). |
 | `CONTROL_PLANE_UI_URL` | `""` | Public control-plane UI URL. |
 
+### Task admission
+
+| Env var | Default | Purpose |
+| --- | --- | --- |
+| `PLATFORM_MAX_RUNNING_TASKS` | `3` | Maximum concurrently admitted parent tasks across all workflows. Tasks are selected by `resume_pending`, workflow priority, then FIFO order. This does not cap parallel subagent or model calls inside a running task. |
+
+Set each workflow's `runtime.priority` in `agent.yaml` to `high`, `medium`, or
+`low` (or the equivalent `1`, `2`, or `3`). Equal-priority workflows retain FIFO
+queue order. `runtime.parallel_workers` remains the per-workflow cap; platform
+and workflow caps must both permit a task before it starts.
+
+### Workflow concurrency and priority
+
+Configure the platform-wide ceiling in the workflow repository's
+`platform-config.yaml`:
+
+```yaml
+config:
+  PLATFORM_MAX_RUNNING_TASKS: "3"
+```
+
+Configure each workflow in its `agent.yaml`:
+
+```yaml
+runtime:
+  parallel_workers: 1
+  priority: high
+```
+
+`PLATFORM_MAX_RUNNING_TASKS` is the maximum number of concurrently running
+parent tasks across the entire platform. `parallel_workers` is the maximum for
+one workflow. A task starts only when both caps allow it.
+
+`priority` controls selection among eligible queued tasks: `high` runs before
+`medium`, which runs before `low`; use `1`, `2`, and `3` as equivalent numeric
+forms. Tasks at the same priority retain FIFO order. A workflow at its
+`parallel_workers` cap is skipped so the next eligible workflow can run.
+
+These controls govern parent task admission only. A parent task may still launch
+parallel subagents, so choose the platform cap below the available model-call
+capacity when workflows use subagent fan-out.
+
 ### Message bus
 
 | Env var | Default | Purpose |
