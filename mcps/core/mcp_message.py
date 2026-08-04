@@ -12,7 +12,8 @@ from fastmcp import FastMCP
 from fastmcp.dependencies import CurrentHeaders
 from starlette.responses import JSONResponse
 
-from mcps.common import bootstrap_platform_env, extract_bearer_token, get_env
+from mcps.common import bootstrap_platform_env, get_env
+from shared.lib.config import settings
 from shared.lib.message_bus import build_message_bus
 
 bootstrap_platform_env()
@@ -20,8 +21,6 @@ bootstrap_platform_env()
 logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
-MESSAGE_BUS_PROVIDER = get_env("MESSAGE_BUS_PROVIDER", "mattermost").strip().lower() or "mattermost"
-MESSAGE_BUS_API_URL = get_env("MESSAGE_BUS_API_URL", "")
 GATEWAY_URL = get_env("GATEWAY_URL", "http://gateway:8080")
 
 mcp = FastMCP("Message MCP Server")
@@ -61,17 +60,16 @@ def _append_task_footer(text: str, headers: dict[str, str]) -> str:
 async def _post_message_async(
     *,
     text: str,
-    bot_token: str,
     channel: str,
     channel_id: str,
     thread_id: str,
     team_id: str,
     team_name: str,
 ) -> dict[str, Any]:
-    if MESSAGE_BUS_PROVIDER not in {"mattermost", "slack"}:
-        return {"error": f"Unsupported MESSAGE_BUS_PROVIDER: {MESSAGE_BUS_PROVIDER}"}
-    if not bot_token:
-        return {"error": "Authorization header required"}
+    if settings.message_bus.provider not in {"mattermost", "slack"}:
+        return {"error": f"Unsupported message_bus.provider: {settings.message_bus.provider}"}
+    if not settings.message_bus.bot_token:
+        return {"error": "message_bus.bot_token_secret is not configured"}
     if not channel and not channel_id:
         return {"error": "No channel or channel_id specified and session headers are missing"}
 
@@ -90,10 +88,10 @@ async def _post_message_async(
             active_thread_id = value
 
         bus = build_message_bus(
-            provider=MESSAGE_BUS_PROVIDER,
+            provider=settings.message_bus.provider,
             client_factory=client_factory,
-            api_url=MESSAGE_BUS_API_URL,
-            bot_token=bot_token,
+            api_url=settings.message_bus.api_url,
+            bot_token=settings.message_bus.bot_token,
             channel_id=channel_id,
             channel_name=channel,
             team_id=team_id,
@@ -112,7 +110,6 @@ async def _post_message_async(
 def _post_message(
     *,
     text: str,
-    bot_token: str,
     channel: str,
     channel_id: str,
     thread_id: str,
@@ -123,7 +120,6 @@ def _post_message(
         return asyncio.run(
             _post_message_async(
                 text=text,
-                bot_token=bot_token,
                 channel=channel,
                 channel_id=channel_id,
                 thread_id=thread_id,
@@ -147,7 +143,6 @@ def post_message(
     """Use this for visible notes that are separate from the workflow's final result text."""
     return _post_message(
         text=_append_task_footer(text, headers),
-        bot_token=extract_bearer_token(headers),
         channel=_resolve_channel(channel, headers),
         channel_id=_resolve_channel_id(channel_id, headers),
         thread_id=_resolve_thread(thread_id, headers),
@@ -181,7 +176,6 @@ def handoff_task(
     resolved_thread = _resolve_thread(thread_id, headers)
     posted = _post_message(
         text=_append_task_footer(text, headers),
-        bot_token=extract_bearer_token(headers),
         channel=resolved_channel,
         channel_id=resolved_channel_id,
         thread_id=resolved_thread,
@@ -269,33 +263,9 @@ def post_rca_summary(
     )
 
 
-@mcp.tool(annotations={"openWorldHint": True})
-def ask_approval(
-    question: Annotated[str, "What you need approval for."],
-    options: Annotated[list[str], "Decision options such as Approve or Reject."],
-    context: Annotated[str | None, "Optional supporting context for the decision."] = None,
-    channel: Annotated[str | None, "Optional channel name override."] = None,
-    channel_id: Annotated[str | None, "Optional channel ID override."] = None,
-    thread_id: Annotated[str | None, "Optional thread root post ID override."] = None,
-    headers: dict[str, str] = CurrentHeaders(),
-) -> dict[str, Any]:
-    """Use this only when the harness approval gate is not the right mechanism."""
-    options_text = "\n".join(f"  - **{option}**" for option in options)
-    message = (
-        f"**Approval Required**\n\n{question}\n\n"
-        f"**Options:**\n{options_text}\n\n_Reply in this thread with your choice._"
-    )
-    if context:
-        message = (
-            f"**Approval Required**\n\n{question}\n\n**Options:**\n{options_text}\n\n"
-            f"*Context:* {context}\n\n_Reply in this thread with your choice._"
-        )
-    return post_message(message, channel=channel, channel_id=channel_id, thread_id=thread_id, headers=headers)
-
-
 @mcp.custom_route("/health", methods=["GET"])
 async def health(_request):
-    return JSONResponse({"status": "ok", "service": "mcp-message", "provider": MESSAGE_BUS_PROVIDER})
+    return JSONResponse({"status": "ok", "service": "mcp-message", "provider": settings.message_bus.provider})
 
 
 app = mcp.http_app(path="/mcp", transport="streamable-http", stateless_http=False)

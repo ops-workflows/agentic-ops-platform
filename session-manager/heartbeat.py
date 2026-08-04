@@ -70,7 +70,7 @@ async def heartbeat_monitor() -> None:
 
 async def _notify_lost_task(task_id) -> None:
     """Post notification to the message bus about a lost task."""
-    if not settings.message_bus_api_url:
+    if not settings.message_bus.api_url:
         return
 
     # Look up task for MM channel info
@@ -82,10 +82,10 @@ async def _notify_lost_task(task_id) -> None:
     if not task or not task.message_channel:
         return
 
-    bot_token = settings.message_bus_bot_token
+    bot_token = settings.message_bus.bot_token
     if not bot_token:
         logger.warning(
-            "Skipping lost-task message post for %s: platform MESSAGE_BUS_BOT_TOKEN not configured",
+            "Skipping lost-task message post for %s: message_bus.bot_token_secret is not configured",
             task.workflow,
         )
         return
@@ -102,10 +102,10 @@ async def _notify_lost_task(task_id) -> None:
 
     metadata = task.task_metadata if isinstance(task.task_metadata, dict) else {}
 
-    team_name = str(metadata.get("team_domain") or metadata.get("team_name") or settings.message_bus_team_name or "")
+    team_name = str(metadata.get("team_domain") or metadata.get("team_name") or settings.message_bus.team_name or "")
     posted = await post_channel_message(
-        settings.message_bus_provider,
-        api_url=settings.message_bus_api_url,
+        settings.message_bus.provider,
+        api_url=settings.message_bus.api_url,
         bot_token=bot_token,
         text=text,
         channel_id=str(metadata.get("channel_id") or ""),
@@ -120,7 +120,7 @@ async def _notify_lost_task(task_id) -> None:
 
 async def _notify_timed_out_task(task_id) -> None:
     """Post notification to the message bus about a task exceeding runtime timeout."""
-    if not settings.message_bus_api_url:
+    if not settings.message_bus.api_url:
         return
 
     from shared.lib.task_queue import get_task
@@ -131,10 +131,10 @@ async def _notify_timed_out_task(task_id) -> None:
     if not task or not task.message_channel:
         return
 
-    bot_token = settings.message_bus_bot_token
+    bot_token = settings.message_bus.bot_token
     if not bot_token:
         logger.warning(
-            "Skipping timed-out task message post for %s: platform MESSAGE_BUS_BOT_TOKEN not configured",
+            "Skipping timed-out task message post for %s: message_bus.bot_token_secret is not configured",
             task.workflow,
         )
         return
@@ -149,10 +149,10 @@ async def _notify_timed_out_task(task_id) -> None:
         f"Workflow: {task.workflow}"
     )
 
-    team_name = str(metadata.get("team_domain") or metadata.get("team_name") or settings.message_bus_team_name or "")
+    team_name = str(metadata.get("team_domain") or metadata.get("team_name") or settings.message_bus.team_name or "")
     posted = await post_channel_message(
-        settings.message_bus_provider,
-        api_url=settings.message_bus_api_url,
+        settings.message_bus.provider,
+        api_url=settings.message_bus.api_url,
         bot_token=bot_token,
         text=text,
         channel_id=str(metadata.get("channel_id") or ""),

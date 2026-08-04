@@ -57,8 +57,6 @@ from claude_agent_sdk import (
     query,
 )
 
-from shared.lib.message_bus import MessageBus, build_message_bus
-
 logging.basicConfig(level=logging.INFO, format="[entrypoint] %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -100,8 +98,6 @@ os.environ.setdefault("CLAUDE_CODE_STREAM_CLOSE_TIMEOUT", str(int(CONTROL_REQUES
 MESSAGE_CHANNEL = os.environ.get("MESSAGE_CHANNEL", "")
 MESSAGE_THREAD_ID = os.environ.get("MESSAGE_THREAD_ID", "")
 ACTIVE_THREAD_ID = MESSAGE_THREAD_ID
-MESSAGE_BUS_API_URL = os.environ.get("MESSAGE_BUS_API_URL", "")
-MESSAGE_BUS_PROVIDER = os.environ.get("MESSAGE_BUS_PROVIDER", "mattermost").strip().lower() or "mattermost"
 MAX_TURNS = int(os.environ.get("MAX_TURNS", "50"))
 RUNTIME_TIMEOUT_SEC = int(os.environ.get("RUNTIME_TIMEOUT_SEC", "0") or "0")
 MESSAGE_CHANNEL_ID = str(TASK_METADATA.get("channel_id") or os.environ.get("MESSAGE_CHANNEL_ID", ""))
@@ -154,11 +150,6 @@ SHARED_DIR = Path(os.environ.get("SHARED_DIR", "/shared"))
 # deny-list so every platform-level secret is hidden from sandboxed Bash.
 _platform_config_file = os.environ.get("PLATFORM_CONFIG_FILE", "").strip()
 PLATFORM_CONFIG_PATH = Path(_platform_config_file) if _platform_config_file else SHARED_DIR / "platform-config.yaml"
-
-# Platform-managed secret env vars injected by the session manager that are not
-# declared in any plugin's agent.yaml secrets block, but must still be hidden
-# from sandboxed Bash commands.
-_HARNESS_SECRET_ENV_KEYS: frozenset[str] = frozenset({"MESSAGE_BUS_BOT_TOKEN"})
 
 # Placeholder prefix used by the agent.yaml template's documentation stub. Such
 # names are dropped when assembling the live sandbox credential deny-list.
@@ -398,8 +389,7 @@ def _load_secret_env() -> dict[str, str]:
     """Collect injected secret env vars for harness use.
 
     Secrets remain in the process environment so Claude Code can expand ${VAR}
-    placeholders in .mcp.json. The harness also keeps a copy for approvals and
-    thread polling.
+    placeholders in .mcp.json.
     """
     # Load agent.yaml to find secret key names
     agent_yaml_path = PLUGIN_DIR / "agent.yaml"
@@ -693,11 +683,10 @@ def _collect_secret_env_keys() -> set[str]:
             continue
 
         secrets = data.get("secrets", {})
-        if not isinstance(secrets, dict):
-            continue
-        for name in secrets:
-            if isinstance(name, str) and name and not name.startswith(_CREDENTIAL_PLACEHOLDER_PREFIX):
-                names.add(name)
+        if isinstance(secrets, dict):
+            for name in secrets:
+                if isinstance(name, str) and name and not name.startswith(_CREDENTIAL_PLACEHOLDER_PREFIX):
+                    names.add(name)
 
     return names
 
@@ -849,30 +838,11 @@ def _tool_matches_pattern(tool_name: str, tool_input: dict, pattern: str) -> boo
     return tool_name == pattern
 
 
-def _get_message_bus_bot_token(secret_env: dict[str, str]) -> str:
-    return secret_env.get("MESSAGE_BUS_BOT_TOKEN", "") or os.environ.get("MESSAGE_BUS_BOT_TOKEN", "")
-
-
 def _set_active_thread_id(thread_id: str) -> None:
     global ACTIVE_THREAD_ID
     ACTIVE_THREAD_ID = thread_id
     if thread_id:
         logger.info("Using message-bus thread %s for task %s", thread_id, TASK_ID)
-
-
-def _build_message_bus(secret_env: dict[str, str]) -> MessageBus:
-    return build_message_bus(
-        provider=MESSAGE_BUS_PROVIDER,
-        client_factory=_get_client,
-        api_url=MESSAGE_BUS_API_URL,
-        bot_token=_get_message_bus_bot_token(secret_env),
-        channel_id=MESSAGE_CHANNEL_ID,
-        channel_name=MESSAGE_CHANNEL,
-        team_id=MESSAGE_TEAM_ID,
-        team_name=MESSAGE_TEAM_NAME,
-        get_thread_id=_current_thread_id,
-        set_thread_id=_set_active_thread_id,
-    )
 
 
 def _extract_tool_result_message(message: Any) -> dict[str, Any] | None:
@@ -920,10 +890,20 @@ def _session_details_url() -> str:
     return f"{CONTROL_PLANE_UI_URL}/sessions/{TASK_ID}"
 
 
-async def _post_thread_message(secret_env: dict[str, str], text: str) -> dict[str, Any] | None:
-    """Post a message into the current task thread through the configured message bus."""
-    posted = await _build_message_bus(secret_env).post_to_thread(text)
-    return posted.raw if posted else None
+async def _post_thread_message(text: str) -> dict[str, Any] | None:
+    """Ask the gateway to post a runtime message through its configured provider."""
+    client = await _get_client()
+    try:
+        response = await client.post(
+            f"{GATEWAY_URL}/api/tasks/{TASK_ID}/message",
+            json={"text": text},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError as exc:
+        logger.warning("Gateway could not post message-bus thread message: %s", exc)
+        return None
 
 
 async def _wait_for_thread_reply(
@@ -933,15 +913,29 @@ async def _wait_for_thread_reply(
     ignore_post_ids: set[str] | None = None,
     timeout_sec: int = 3600,
 ) -> dict[str, str] | None:
-    """Poll the current task thread until a human replies through the configured message bus."""
-    reply = await _build_message_bus(secret_env).wait_for_reply(
-        started_after_ms=started_after_ms,
-        ignore_message_ids=ignore_post_ids,
-        timeout_sec=timeout_sec,
-    )
-    if not reply:
-        return None
-    return {"message": reply.message, "user_id": reply.user_id, "username": reply.username}
+    """Poll the Gateway for a WebSocket-ingested reply to the current question."""
+    del secret_env, ignore_post_ids
+    deadline = time.time() + timeout_sec
+    client = await _get_client()
+    while time.time() < deadline:
+        try:
+            response = await client.get(
+                f"{GATEWAY_URL}/api/tasks/{TASK_ID}/message-reply",
+                params={"after_ms": started_after_ms},
+                timeout=30,
+            )
+            response.raise_for_status()
+            reply = response.json()
+            if reply and reply.get("message"):
+                return {
+                    "message": str(reply["message"]),
+                    "user_id": str(reply.get("user_id") or ""),
+                    "username": str(reply.get("username") or ""),
+                }
+        except httpx.HTTPError as exc:
+            logger.warning("Failed to read question reply from Gateway: %s", exc)
+        await asyncio.sleep(2)
+    return None
 
 
 def _parse_question_response(response: str, question: dict[str, Any]) -> str:
@@ -1126,8 +1120,16 @@ async def _handle_ask_user_question(
             ]
         )
 
+        await report_event(
+            "user_question_requested",
+            {
+                "question_count": len(tool_input.get("questions", [])),
+                "thread_id_present": bool(_current_thread_id()),
+            },
+        )
+
         started_at_ms = int(time.time() * 1000)
-        posted = await _post_thread_message(secret_env, question_prompt)
+        posted = await _post_thread_message(question_prompt)
         if not posted:
             await report_event(
                 "user_question_delivery_failed",
@@ -1141,14 +1143,6 @@ async def _handle_ask_user_question(
                 message="Unable to deliver AskUserQuestion through the configured message bus",
                 interrupt=True,
             )
-
-        await report_event(
-            "user_question_requested",
-            {
-                "question_count": len(tool_input.get("questions", [])),
-                "thread_id_present": bool(_current_thread_id()),
-            },
-        )
 
         reply = await _wait_for_thread_reply(
             secret_env,

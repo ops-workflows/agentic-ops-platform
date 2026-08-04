@@ -41,8 +41,8 @@ workflows/<name>/
 | `runtime.container_image` | string | Override the runtime image for this workflow. |
 | `runtime.memory_volumes` | list[string] | Named memory volumes for this workflow. |
 | `schedules[]` | array | `name`, `cron` (5-field), `prompt`, optional `message_channel`, `enabled` (default `true`). |
-| `messaging.channels` | list[string] | Message-bus channels this workflow listens on. |
-| `messaging.trigger_pattern` | string | Optional trigger pattern (e.g. `@agent`). |
+| `messaging.channels` | list[string] | Message-bus channel names or provider IDs this workflow listens on. Names are resolved to IDs visible to the configured bot at gateway startup. |
+| `messaging.trigger_words` | list[string] | Prefixes that create a task in configured channels (for example, `@agent`). |
 
 `agent.yaml` is validated against
 [schemas/agent-yaml-schema.json](../schemas/agent-yaml-schema.json) —

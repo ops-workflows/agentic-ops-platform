@@ -10,6 +10,7 @@ import pytest
 pytestmark = pytest.mark.unit
 
 from gateway.plugin_dir import (  # noqa: E402
+    MessageRoute,
     discover_message_routes,
     discover_plugin_configs,
     read_platform_config,
@@ -96,7 +97,13 @@ def test_discover_plugin_configs_missing_dir(tmp_path: Path) -> None:
 
 def test_discover_message_routes_maps_channel_to_workflow(fixture_workflows_dir: Path) -> None:
     routes = discover_message_routes(fixture_workflows_dir)
-    assert routes.get("platform-test-channel") == "platform-test"
+    assert routes == [
+        MessageRoute(
+            workflow="platform-test",
+            channel="platform-test-channel",
+            trigger_words=("@agent",),
+        )
+    ]
 
 
 def test_discover_workflow_packages_accepts_repo_root_with_workflows(fixture_repo_root: Path) -> None:

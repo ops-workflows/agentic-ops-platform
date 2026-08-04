@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import os
 
+from pydantic import PrivateAttr
 from pydantic_settings import BaseSettings
 
-from shared.lib.platform_secrets import load_platform_env
+from shared.lib.platform_secrets import MessageBusConfig, load_message_bus_config, load_platform_env
 
 
 class DatabaseSettings(BaseSettings):
@@ -39,14 +40,6 @@ class ObjectStoreSettings(BaseSettings):
     object_store_gcp_project: str = ""
 
 
-class MessageBusSettings(BaseSettings):
-    message_bus_provider: str = "mattermost"
-    message_outgoing_webhook_secret: str = ""
-    message_bus_bot_token: str = ""
-    message_bus_api_url: str = ""
-    message_bus_team_name: str = ""
-
-
 class HindsightSettings(BaseSettings):
     hindsight_url: str = "http://hindsight:8888"
 
@@ -54,9 +47,9 @@ class HindsightSettings(BaseSettings):
 class Settings(
     DatabaseSettings,
     ObjectStoreSettings,
-    MessageBusSettings,
     HindsightSettings,
 ):
+    _message_bus: MessageBusConfig = PrivateAttr(default_factory=MessageBusConfig)
     gateway_host: str = "0.0.0.0"  # noqa: S104
     gateway_port: int = 8080
     poll_interval_sec: int = 2
@@ -121,6 +114,11 @@ class Settings(
     # string or a file path prefixed with "file:".
     age_identity: str = ""
 
+    @property
+    def message_bus(self) -> MessageBusConfig:
+        """Message provider settings from the mounted platform YAML only."""
+        return self._message_bus
+
 
 settings = Settings()
 
@@ -148,6 +146,7 @@ def _apply_platform_secret_defaults() -> None:
 
     loaded = load_platform_env(platform_file, identity=settings.age_identity or None)
     _apply_platform_overrides(settings, loaded)
+    settings._message_bus = load_message_bus_config(platform_file, identity=settings.age_identity or None)
 
 
 _apply_platform_secret_defaults()

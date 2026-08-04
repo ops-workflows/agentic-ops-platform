@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import uuid
 
 import pytest
 from sqlalchemy import select
@@ -184,11 +185,10 @@ def _watch_for_post_and_reply(
     *,
     matcher: str,
     reply: str,
+    provider: str = "mattermost",
     timeout: float = 60.0,
 ):
-    """Run in a background asyncio task: poll fake Message for a post
-    matching ``matcher`` (substring), then inject ``reply`` to its thread.
-    """
+    """Wait for a question post, then deliver its reply through gateway ingress."""
 
     async def _runner():
         loop = asyncio.get_event_loop()
@@ -202,11 +202,27 @@ def _watch_for_post_and_reply(
         post = await loop.run_in_executor(None, _wait)
         if post is None:
             return None
-        fake_mattermost.inject_reply(
-            thread_id=post.root_id or post.id,
-            channel_id=post.channel_id,
-            message=reply,
-        )
+        from gateway.message_ingress import GatewayMessageIngress
+        from shared.lib.message_ingress import InboundMessage
+
+        ingress = GatewayMessageIngress()
+        try:
+            await ingress.handle_event(
+                InboundMessage(
+                    provider=provider,
+                    message_id=f"reply-{uuid.uuid4().hex}",
+                    thread_id=post.root_id or post.id,
+                    channel_id=post.channel_id,
+                    channel_name="platform-test-channel",
+                    team_id="test-team-id",
+                    team_name="test-team",
+                    user_id="user-operator",
+                    username="operator",
+                    text=reply,
+                )
+            )
+        finally:
+            await ingress.stop()
         return post
 
     return asyncio.create_task(_runner())
@@ -358,6 +374,71 @@ async def test_ask_user_question_multi_select(
     exit_code, logs = await spawn_and_wait(task, timeout_sec=240)
     with contextlib.suppress(TimeoutError, asyncio.CancelledError):
         await asyncio.wait_for(reply_task, timeout=5)
+    await admit_task
+
+    assert exit_code == 0, f"Container exited {exit_code}.\nLogs:\n{logs}"
+
+
+@pytest.mark.asyncio
+async def test_ask_user_question_slack_reply(
+    require_runtime,
+    patched_settings,
+    mock_llm,
+    fake_mattermost,
+    collected_events,
+    admit_when_resume_pending,
+    create_task,
+    spawn_and_wait,
+) -> None:
+    """A Slack inbound message resumes a runtime waiting on AskUserQuestion."""
+    patched_settings.message_bus.provider = "slack"
+    mock_llm.set_scenario(
+        [
+            Turn(
+                respond=[
+                    {
+                        "type": "tool_use",
+                        "name": "AskUserQuestion",
+                        "input": {
+                            "questions": [
+                                {
+                                    "question": "Proceed with Slack?",
+                                    "header": "Slack",
+                                    "multiSelect": False,
+                                    "options": [
+                                        {"label": "Yes", "description": "continue"},
+                                        {"label": "No", "description": "stop"},
+                                    ],
+                                }
+                            ]
+                        },
+                    }
+                ],
+                stop_reason="tool_use",
+            ),
+            Turn(respond=[{"type": "text", "text": "Slack answer received."}], stop_reason="end_turn"),
+        ]
+    )
+    task = await create_task(
+        prompt="Ask a question through Slack.",
+        channel="slack",
+        message_channel="C123",
+        message_thread="slack-question-thread",
+    )
+    reply_task = _watch_for_post_and_reply(
+        fake_mattermost,
+        matcher="proceed with slack",
+        reply="1",
+        provider="slack",
+        timeout=120,
+    )
+    admit_task = asyncio.create_task(admit_when_resume_pending(task.id, workflow=task.workflow, timeout=120))
+
+    exit_code, logs = await spawn_and_wait(task, timeout_sec=240)
+    await reply_task
+    event_types = [event.get("event_type") for event in collected_events]
+    assert "user_question_requested" in event_types
+    assert "user_question_resolved" in event_types
     await admit_task
 
     assert exit_code == 0, f"Container exited {exit_code}.\nLogs:\n{logs}"

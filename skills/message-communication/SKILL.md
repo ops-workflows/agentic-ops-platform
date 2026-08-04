@@ -14,7 +14,6 @@ use the message handoff tool rather than silently creating tasks.
 - Prefer `handoff_task` when another workflow needs both a visible note and a queued task
 - Prefer `post_message` for visible side effects that should not replace the final result text
 - Prefer `post_rca_summary` only when the workflow specifically wants the structured RCA layout
-- Use `ask_approval` only when the harness approval flow is not the right mechanism
 
 ### post_message
 Post a general message to the configured channel.
@@ -58,18 +57,6 @@ Args:
     impact: string
     remediation: string[]
   }
-```
-
-### ask_approval
-Legacy direct-post tool. Prefer `permissions.ask` plus the harness approval gate.
-
-```
-Tool: mcp_message → ask_approval
-Args:
-  channel_id: string
-  action_description: string
-  risk_level: "low" | "medium" | "high"
-  details: string
 ```
 
 ## Message Formatting Guidelines

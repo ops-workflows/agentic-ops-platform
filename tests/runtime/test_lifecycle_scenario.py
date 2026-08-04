@@ -260,3 +260,73 @@ async def test_connector_task_without_message_thread_posts_top_level(
     # All posts created by this run should have empty root_id (top-level).
     top_level = [p for p in posts if not p.root_id]
     assert top_level, "Expected at least one top-level (no root_id) post for a connector-style task"
+
+
+# ─── §2.7.7 Provider ingress creates and completes a task ──────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "channel_id", "thread_id"),
+    [
+        ("mattermost", "mattermost-channel", "mattermost-root"),
+        ("slack", "C123", "1710000000.000100"),
+    ],
+)
+async def test_keyword_message_creates_threaded_task_and_posts_final_response(
+    provider,
+    channel_id,
+    thread_id,
+    require_runtime,
+    patched_settings,
+    mock_llm,
+    fake_mattermost,
+    db_session,
+    spawn_and_wait,
+    _fake_services,
+) -> None:
+    """A provider message matching a workflow keyword creates a task and receives threaded updates."""
+    from gateway.message_ingress import GatewayMessageIngress
+    from shared.lib.message_ingress import InboundMessage
+
+    patched_settings.message_bus.provider = provider
+    fake_mattermost.reset()
+    final_marker = f"KEYWORD_{provider.upper()}_FINAL"
+    mock_llm.set_scenario(
+        [
+            Turn(respond=[{"type": "text", "text": final_marker}], stop_reason="end_turn"),
+        ]
+    )
+
+    ingress = GatewayMessageIngress()
+    try:
+        await ingress.handle_event(
+            InboundMessage(
+                provider=provider,
+                message_id=f"{provider}-message",
+                thread_id=thread_id,
+                channel_id=channel_id,
+                channel_name="platform-test-channel",
+                team_id="test-team-id",
+                team_name="test-team",
+                user_id="operator-user",
+                username="operator",
+                text="@agent investigate the inbound event",
+            )
+        )
+    finally:
+        await ingress.stop()
+
+    task = (
+        await db_session.execute(select(TaskModel).where(TaskModel.prompt == "investigate the inbound event"))
+    ).scalar_one()
+    assert task.channel == provider
+    assert task.message_channel == "platform-test-channel"
+    assert task.message_thread == thread_id
+
+    exit_code, logs = await spawn_and_wait(task, timeout_sec=180)
+    assert exit_code == 0, f"Container exited {exit_code}.\nLogs:\n{logs}"
+
+    posts = fake_mattermost.all_posts()
+    assert any(post.message == ":brain: Working on it..." and post.root_id == thread_id for post in posts)
+    assert any(final_marker in post.message and post.root_id == thread_id for post in posts)

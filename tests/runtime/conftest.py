@@ -223,7 +223,13 @@ def _build_event_collector_app(event_store: list[dict[str, Any]]):
     from fastapi import FastAPI
     from starlette.responses import JSONResponse
 
-    from gateway.api import get_runtime_approval_status, get_task_api
+    from gateway.api import (
+        TaskMessageRequest,
+        get_message_reply,
+        get_runtime_approval_status,
+        get_task_api,
+        post_task_message,
+    )
     from gateway.event_collector import EventPayload, receive_event
     from gateway.message import MattermostInteractiveAction, message_approval_action
 
@@ -248,6 +254,14 @@ def _build_event_collector_app(event_store: list[dict[str, Any]]):
     @app.get("/api/tasks/{task_id}")
     async def task_status(task_id: str):
         return await get_task_api(task_id)
+
+    @app.get("/api/tasks/{task_id}/message-reply")
+    async def message_reply(task_id: str, after_ms: int = 0):
+        return await get_message_reply(task_id, after_ms)
+
+    @app.post("/api/tasks/{task_id}/message")
+    async def post_message(task_id: str, request: Request):
+        return await post_task_message(task_id, TaskMessageRequest(**(await request.json())))
 
     @app.post("/webhooks/message/actions/approval")
     async def approval_action(request: Request):
@@ -346,9 +360,12 @@ def _write_test_platform_config(
             "PG_DB": "agentic_ops",
             "PG_USER": "agentic_ops",
             "PG_PASSWORD": "localdev-postgres-password",
-            "MESSAGE_BUS_API_URL": f"http://host.docker.internal:{message_port}",
-            "MESSAGE_BUS_TEAM_NAME": "test-team",
             "CONTROL_PLANE_UI_URL": "",
+        },
+        "message_bus": {
+            "provider": "mattermost",
+            "api_url": f"http://host.docker.internal:{message_port}",
+            "team_name": "test-team",
         },
         "runtime_env": {
             "ANTHROPIC_API_KEY": None,
@@ -456,6 +473,7 @@ async def async_engine(database_dsn: str):
         "gateway.provisioner",
         "gateway.scheduler",
         "gateway.message",
+        "gateway.message_ingress",
         "gateway.api",
         "gateway.event_collector",
         "session_manager.container_lifecycle",
@@ -504,9 +522,6 @@ def patched_settings(
         "host_repo_root": str(merged_repo_root),
         "workflow_root": str(merged_repo_root / "workflows"),
         "workflow_repo_paths": str(merged_repo_root / "workflows"),
-        "message_bus_api_url": _fake_services["message"].base_url,
-        "message_bus_bot_token": "test-bot-token",
-        "message_bus_team_name": "test-team",
         "gateway_event_url": f"http://host.docker.internal:{_event_collector.port}/events",
         "gateway_public_base_url": _event_collector.base_url,
         "control_plane_ui_url": "",
@@ -519,10 +534,26 @@ def patched_settings(
         originals[attr] = getattr(settings, attr)
         setattr(settings, attr, value)
 
+    original_message_bus = {
+        "provider": settings.message_bus.provider,
+        "api_url": settings.message_bus.api_url,
+        "bot_token": settings.message_bus.bot_token,
+        "team_name": settings.message_bus.team_name,
+        "app_token": settings.message_bus.app_token,
+        "action_callback_secret": settings.message_bus.action_callback_secret,
+    }
+    settings.message_bus.provider = "mattermost"
+    settings.message_bus.api_url = _fake_services["message"].base_url
+    settings.message_bus.bot_token = "test-bot-token"
+    settings.message_bus.team_name = "test-team"
+    settings.message_bus.action_callback_secret = "test-action-callback-secret"
+
     yield settings
 
     for attr, value in originals.items():
         setattr(settings, attr, value)
+    for attr, value in original_message_bus.items():
+        setattr(settings.message_bus, attr, value)
 
 
 # ---------------------------------------------------------------------------
@@ -608,6 +639,7 @@ async def create_task(db_session: AsyncSession):
         *,
         workflow: str = "platform-test",
         prompt: str = "test prompt",
+        channel: str = "mattermost",
         message_channel: str = "platform-test-channel",
         message_thread: str = "",
         task_metadata: dict[str, Any] | None = None,
@@ -616,6 +648,7 @@ async def create_task(db_session: AsyncSession):
             id=uuid.uuid4(),
             workflow=workflow,
             prompt=prompt,
+            channel=channel,
             message_channel=message_channel,
             message_thread=message_thread,
             status="running",
@@ -693,8 +726,8 @@ def spawn_and_wait(
 
             from shared.lib.config import settings as shared_settings
 
-            original_message_bus_api_url = shared_settings.message_bus_api_url
-            shared_settings.message_bus_api_url = _fake_services["message"].base_url
+            original_message_bus_api_url = shared_settings.message_bus.api_url
+            shared_settings.message_bus.api_url = _fake_services["message"].base_url
             try:
                 await _post_completion_to_message_thread(
                     str(task.id),
@@ -704,7 +737,7 @@ def spawn_and_wait(
                 )
                 await backup_memory(task.workflow)
             finally:
-                shared_settings.message_bus_api_url = original_message_bus_api_url
+                shared_settings.message_bus.api_url = original_message_bus_api_url
         if os.environ.get("RUNTIME_TEST_DEBUG") == "1":
             import sys as _sys
 
@@ -758,13 +791,13 @@ def admit_when_resume_pending(async_engine):
 
 
 # ---------------------------------------------------------------------------
-# Reply-by-pattern helper for FakeMattermost
+# Reply-by-pattern helper for gateway-owned Mattermost ingress
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
 def reply_when(fake_mattermost):
-    """Spawn a background asyncio task that replies to the first matching post.
+    """Spawn a background asyncio task that ingests a reply to a matching post.
 
     Usage:
 
@@ -782,11 +815,27 @@ def reply_when(fake_mattermost):
             )
             if post is None:
                 return None
-            fake_mattermost.inject_reply(
-                thread_id=post.root_id or post.id,
-                channel_id=post.channel_id,
-                message=reply,
-            )
+            from gateway.message_ingress import GatewayMessageIngress
+            from shared.lib.message_ingress import InboundMessage
+
+            ingress = GatewayMessageIngress()
+            try:
+                await ingress.handle_event(
+                    InboundMessage(
+                        provider="mattermost",
+                        message_id=f"reply-{uuid.uuid4().hex}",
+                        thread_id=post.root_id or post.id,
+                        channel_id=post.channel_id,
+                        channel_name="platform-test-channel",
+                        team_id="test-team-id",
+                        team_name="test-team",
+                        user_id="user-operator",
+                        username="operator",
+                        text=reply,
+                    )
+                )
+            finally:
+                await ingress.stop()
             return post
 
         t = asyncio.create_task(_runner())

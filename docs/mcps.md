@@ -46,7 +46,6 @@ injected by the runtime (`x-message-channel`, `x-message-channel-id`,
 | `post_message` | Post a markdown message to a channel/thread. |
 | `handoff_task` | Post a visible handoff message and enqueue a task for another workflow. |
 | `post_rca_summary` | Post a structured root-cause-analysis summary. |
-| `ask_approval` | Post an approval question with decision options. |
 
 ### `memory` — long-term memory (backed by Hindsight)
 

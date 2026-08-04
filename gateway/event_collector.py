@@ -112,8 +112,8 @@ def _can_deliver_approval_prompt(task: Task | None) -> bool:
         return False
     task_metadata = task.task_metadata if isinstance(task.task_metadata, dict) else {}
     return bool(
-        settings.message_bus_api_url
-        and settings.message_bus_bot_token
+        settings.message_bus.api_url
+        and settings.message_bus.bot_token
         and (task.message_channel or task.message_thread or task_metadata.get("channel_id"))
     )
 

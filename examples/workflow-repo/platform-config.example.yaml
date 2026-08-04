@@ -69,6 +69,27 @@ connectors:
 message_bus:
   # Supported providers: mattermost, slack.
   provider: mattermost
+  api_url: http://mattermost:8065
+  team_name: platform
+  bot_token_secret: message_bus_bot_token
+  # Required only for Slack Socket Mode.
+  app_token_secret: message_bus_app_token
+  # Required only for Mattermost interactive approval buttons.
+  action_callback_secret: message_action_callback_secret
+
+# To use Slack instead, replace the message_bus mapping above with:
+# message_bus:
+#   provider: slack
+#   api_url: https://slack.com/api
+#   bot_token_secret: message_bus_bot_token
+#   app_token_secret: message_bus_app_token
+#
+# Slack requires a bot token with chat:write, channels:read, groups:read, and
+# access to every configured messaging.channels channel. It also requires a
+# Socket Mode app token. action_callback_secret is not used by Slack.
+# Mattermost requires the bot token and api_url; team_name selects ambiguous
+# channel names. Its approval buttons call the public gateway callback URL and
+# use action_callback_secret as a gateway-internal callback value.
 
 runtime_bundles:
   storage: s3
@@ -118,10 +139,12 @@ memory:
     learning: {}
 
 secrets:
-  MESSAGE_BUS_BOT_TOKEN:
+  message_bus_bot_token:
     encrypted: ENC[age,replace-with-encrypted-token]
-  MESSAGE_OUTGOING_WEBHOOK_SECRET:
-    encrypted: ENC[age,replace-with-encrypted-secret]
+  message_bus_app_token:
+    encrypted: ENC[age,replace-with-encrypted-app-token]
+  message_action_callback_secret:
+    encrypted: ENC[age,replace-with-encrypted-action-secret]
   # GCP connectors use this when Kubernetes workload identity is unavailable.
   # It is materialized as a temporary ADC file inside the connector process.
   GCP_SERVICE_ACCOUNT_JSON:

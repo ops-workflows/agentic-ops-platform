@@ -4,7 +4,7 @@ The Gateway is the web-facing HTTP service. It receives all inbound requests,
 writes to Postgres, and returns. No heavy processing — it's a thin routing layer.
 
 Mounts:
-    - Message webhook handler (human → agent)
+    - Gateway-owned message ingress (human → agent)
   - Event collector (agent → control plane, replaces Langfuse)
   - Control-plane API (UI data)
   - Scheduler (APScheduler for cron jobs)
@@ -22,6 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from gateway.api import router as api_router
 from gateway.event_collector import router as event_router
 from gateway.message import router as message_router
+from gateway.message_ingress import GatewayMessageIngress
 from gateway.provisioner import run_provisioner_scan
 from gateway.scheduler import start_scheduler, stop_scheduler
 from shared.lib.db import ensure_runtime_schema
@@ -42,8 +43,12 @@ async def lifespan(app: FastAPI):
     await run_provisioner_scan()
     # Start APScheduler (reads cron from agent.yaml)
     await start_scheduler()
+    message_ingress = GatewayMessageIngress()
+    await message_ingress.start()
+    app.state.message_ingress = message_ingress
     logger.info("Gateway ready")
     yield
+    await message_ingress.stop()
     # Shutdown
     await stop_scheduler()
     logger.info("Gateway shut down")

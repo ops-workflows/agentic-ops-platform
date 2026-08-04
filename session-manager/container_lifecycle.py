@@ -313,13 +313,10 @@ async def spawn_agent_session(task: Task) -> RuntimeHandle | None:
             "MESSAGE_TEAM_NAME": str(
                 task_metadata.get("team_domain")
                 or task_metadata.get("team_name")
-                or settings.message_bus_team_name
+                or settings.message_bus.team_name
                 or ""
             ),
             # ── Harness-only message provider context for approvals/questions ──
-            "MESSAGE_BUS_BOT_TOKEN": settings.message_bus_bot_token or "",
-            "MESSAGE_BUS_API_URL": platform_config_env.get("MESSAGE_BUS_API_URL", settings.message_bus_api_url),
-            "MESSAGE_BUS_PROVIDER": platform_config_env.get("MESSAGE_BUS_PROVIDER", settings.message_bus_provider),
             "CONTROL_PLANE_UI_URL": platform_config_env.get("CONTROL_PLANE_UI_URL", settings.control_plane_ui_url),
             # ── Observability (non-secret) ──
             "EVENT_COLLECTOR_URL": settings.gateway_event_url,
@@ -590,7 +587,7 @@ async def _post_completion_to_message_thread(task_id: str, workflow: str, status
     harness via message thread replies. This function only handles the final
     completion/failure notification.
     """
-    if not settings.message_bus_api_url:
+    if not settings.message_bus.api_url:
         return
 
     # Look up message channel/thread from task
@@ -606,10 +603,10 @@ async def _post_completion_to_message_thread(task_id: str, workflow: str, status
     if not task or not task.message_channel:
         return
 
-    bot_token = settings.message_bus_bot_token
+    bot_token = settings.message_bus.bot_token
     if not bot_token:
         logger.warning(
-            "Skipping message completion post for %s: platform MESSAGE_BUS_BOT_TOKEN not configured", workflow
+            "Skipping message completion post for %s: message_bus.bot_token_secret is not configured", workflow
         )
         return
 
@@ -657,10 +654,10 @@ async def _post_completion_to_message_thread(task_id: str, workflow: str, status
 
     metadata = task.task_metadata if isinstance(task.task_metadata, dict) else {}
 
-    team_name = str(metadata.get("team_domain") or metadata.get("team_name") or settings.message_bus_team_name or "")
+    team_name = str(metadata.get("team_domain") or metadata.get("team_name") or settings.message_bus.team_name or "")
     posted = await post_channel_message(
-        settings.message_bus_provider,
-        api_url=settings.message_bus_api_url,
+        settings.message_bus.provider,
+        api_url=settings.message_bus.api_url,
         bot_token=bot_token,
         text=text,
         channel_id=str(metadata.get("channel_id") or ""),

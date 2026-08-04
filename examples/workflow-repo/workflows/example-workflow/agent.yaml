@@ -34,7 +34,7 @@ env: {}
 # Set via: `agentic-ops secrets set {WORKFLOW_NAME} SECRET_NAME`
 # SECURITY: Available to Claude Code for ${VAR} expansion in .mcp.json.
 # Constrain Bash via settings.json sandbox + permission rules.
-# Platform-level credentials such as MESSAGE_BUS_BOT_TOKEN belong in
+# Platform-level message-bus credentials belong in
 # platform-config.yaml, not here.
 secrets: {}
   # API_TOKEN:
@@ -44,7 +44,7 @@ secrets: {}
 # NOTE: Sandbox credential isolation is configured in settings.json under
 # sandbox.credentials.envVars. The runtime auto-populates that deny-list at
 # workspace assembly from the secrets declared above plus every secret in
-# platform-config.yaml (and MESSAGE_BUS_BOT_TOKEN), so you normally don't edit it.
+# platform-config.yaml, so you normally don't edit it.
 
 # ── Runtime ─────────────────────────────────────────────────────────
 runtime:
@@ -72,4 +72,5 @@ schedules: []
 messaging:
   channels:
     - "{CHANNEL_NAME}"
-  trigger_pattern: "@agent"
+  trigger_words:
+    - "@agent"

@@ -191,9 +191,13 @@
           "items": { "type": "string" },
           "description": "Channels this workflow listens on"
         },
-        "trigger_pattern": {
-          "type": "string",
-          "description": "Message pattern that triggers this workflow (e.g., '@agent')"
+        "trigger_words": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Message prefixes that start this workflow in its configured channels"
         }
       }
     }

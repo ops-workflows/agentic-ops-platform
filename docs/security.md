@@ -187,8 +187,10 @@ Tool calls that match a workflow's permission ask-list (glob patterns such as
 1. The runtime creates an `Approval` row (`status: "pending"`) and posts a
    prompt with approve/reject buttons to the message bus
    (`gateway/approval_broker.py`).
-2. A human's decision arrives via a message-bus action webhook, which updates
-   the `Approval` row and records a `SessionEvent`.
+2. A human's decision arrives at the gateway through a Mattermost approval
+  action callback or Slack Socket Mode, which updates the `Approval` row and
+  records a `SessionEvent`. The original approval card is updated with the
+  decision and approver; no separate audit post is sent to the channel.
 3. The runtime, which is polling approval status, proceeds or fails the tool
    call based on that decision — the model never has an unmediated path to
    run a gated action.

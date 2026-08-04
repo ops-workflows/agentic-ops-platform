@@ -4,7 +4,6 @@
       "type": "http",
       "url": "http://mcp-message:8100/mcp",
       "headers": {
-        "Authorization": "Bearer ${MESSAGE_BUS_BOT_TOKEN}",
         "X-Task-Id": "${TASK_ID}",
         "X-Task-Workflow": "${TASK_WORKFLOW}",
         "X-Gateway-Url": "${GATEWAY_URL}",

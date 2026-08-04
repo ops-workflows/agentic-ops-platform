@@ -42,3 +42,5 @@ schedules:
 messaging:
   channels:
     - platform-test-channel
+  trigger_words:
+    - "@agent"

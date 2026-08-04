@@ -16,6 +16,7 @@ expected by Claude Code from this flat layout at session start.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
@@ -26,6 +27,15 @@ from shared.lib.workflow_paths import discover_workflow_packages
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 AGENT_YAML_SCHEMA_PATH = REPO_ROOT / "schemas" / "agent-yaml-schema.json"
+
+
+@dataclass(frozen=True)
+class MessageRoute:
+    """A workflow-owned rule for turning a human message into a task."""
+
+    workflow: str
+    channel: str
+    trigger_words: tuple[str, ...]
 
 
 @lru_cache(maxsize=1)
@@ -59,34 +69,29 @@ def _messaging_config(config: dict) -> dict:
     return messaging if isinstance(messaging, dict) else {}
 
 
-def discover_message_routes(plugins_dir: Path) -> dict[str, str]:
-    """Return channel_name -> workflow mappings from discovered workflows.
-
-    Each workflow's agent.yaml lists the channels it owns under
-    ``messaging.channels``. The gateway uses this map to resolve which workflow
-    handles a message based on the channel name.
-    """
-    routes: dict[str, str] = {}
-
-    for workflow, config in discover_plugin_configs(plugins_dir):
+def _message_routes(workflows: list[tuple[str, dict]]) -> list[MessageRoute]:
+    routes: list[MessageRoute] = []
+    for workflow, config in workflows:
         messaging = _messaging_config(config)
-        for channel in messaging.get("channels") or []:
-            channel = str(channel).strip().lower()
-            if channel:
-                routes[channel] = workflow
-
+        triggers = tuple(
+            trigger
+            for raw_trigger in messaging.get("trigger_words", ["@agent"])
+            if (trigger := str(raw_trigger).strip().lower())
+        )
+        for raw_channel in messaging.get("channels") or []:
+            channel = str(raw_channel).strip().lower()
+            if channel and triggers:
+                routes.append(MessageRoute(workflow=workflow, channel=channel, trigger_words=triggers))
     return routes
 
 
-def discover_all_message_routes() -> dict[str, str]:
-    routes: dict[str, str] = {}
-    for package in discover_workflow_packages():
-        messaging = _messaging_config(package.config)
-        for channel in messaging.get("channels") or []:
-            channel = str(channel).strip().lower()
-            if channel:
-                routes[channel] = package.name
-    return routes
+def discover_message_routes(plugins_dir: Path) -> list[MessageRoute]:
+    """Return workflow-owned channel and trigger rules from agent.yaml files."""
+    return _message_routes(discover_plugin_configs(plugins_dir))
+
+
+def discover_all_message_routes() -> list[MessageRoute]:
+    return _message_routes([(package.name, package.config) for package in discover_workflow_packages()])
 
 
 def validate_plugin_dir(plugin_dir: Path) -> list[str]:

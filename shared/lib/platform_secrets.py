@@ -4,8 +4,9 @@ The file format mirrors `agent.yaml` by keeping clear-text config separate from
 encrypted secrets, and adds a `runtime_env:` section for values that should be
 injected into every ephemeral runtime container:
 
-        config:
-            MESSAGE_BUS_API_URL: https://message.example.com
+        message_bus:
+            provider: mattermost
+            api_url: https://message.example.com
         runtime_env:
             ANTHROPIC_MODEL: gemma4:26b
             DISABLE_TELEMETRY: true
@@ -21,6 +22,7 @@ import logging
 import os
 import re
 from collections.abc import Mapping, MutableMapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +36,18 @@ ENV_PLACEHOLDER_PATTERN = re.compile(r"^\$\{([A-Z0-9_]+)\}$")
 INLINE_ENV_PLACEHOLDER_PATTERN = re.compile(r"\$\{([A-Z0-9_]+)\}")
 
 MODEL_PROFILE_ENV_ALIASES: dict[str, str] = {}
+
+
+@dataclass
+class MessageBusConfig:
+    """Provider configuration loaded exclusively from ``message_bus`` YAML."""
+
+    provider: str = ""
+    api_url: str = ""
+    team_name: str = ""
+    bot_token: str = ""
+    app_token: str = ""
+    action_callback_secret: str = ""
 
 
 def load_platform_env(path: str, *, identity: str | None = None) -> dict[str, str]:
@@ -60,19 +74,82 @@ def load_platform_env(path: str, *, identity: str | None = None) -> dict[str, st
         if not isinstance(secret_values, dict):
             logger.warning("Platform config file has no valid 'secrets' mapping: %s", path)
         elif identity:
-            env_values.update(decrypt_named_secrets(secret_values, identity=identity))
+            excluded = _message_bus_secret_names(data)
+            env_values.update(
+                decrypt_named_secrets(
+                    {name: spec for name, spec in secret_values.items() if str(name) not in excluded},
+                    identity=identity,
+                )
+            )
         else:
             logger.info("Skipping encrypted platform secrets in %s because AGE_IDENTITY is not set", path)
 
-    message_bus = data.get("message_bus", {})
-    if isinstance(message_bus, dict):
-        provider = str(message_bus.get("provider") or "").strip()
-        if provider:
-            env_values.setdefault("MESSAGE_BUS_PROVIDER", provider)
-    elif message_bus:
-        logger.warning("Platform config file has no valid 'message_bus' mapping: %s", path)
-
     return env_values
+
+
+def load_message_bus_config(path: str, *, identity: str | None = None) -> MessageBusConfig:
+    """Load message provider settings from the native ``message_bus`` section.
+
+    The returned configuration is never translated into environment variables;
+    Compose and Kubernetes both consume the same mounted YAML file.
+    """
+    data = _read_platform_file(path)
+    if not data:
+        return MessageBusConfig()
+
+    message_bus = data.get("message_bus")
+    if not isinstance(message_bus, dict):
+        logger.warning("Platform config file has no valid 'message_bus' mapping: %s", path)
+        return MessageBusConfig()
+
+    secrets = data.get("secrets") if isinstance(data.get("secrets"), dict) else {}
+    return MessageBusConfig(
+        provider=_message_bus_scalar(message_bus, "provider", path).lower(),
+        api_url=_message_bus_scalar(message_bus, "api_url", path),
+        team_name=_message_bus_scalar(message_bus, "team_name", path),
+        bot_token=_message_bus_secret(message_bus, secrets, "bot_token_secret", identity, path),
+        app_token=_message_bus_secret(message_bus, secrets, "app_token_secret", identity, path),
+        action_callback_secret=_message_bus_secret(
+            message_bus, secrets, "action_callback_secret", identity, path
+        ),
+    )
+
+
+def _message_bus_scalar(message_bus: dict[str, Any], key: str, path: str) -> str:
+    value = message_bus.get(key, "")
+    if value is None:
+        return ""
+    if not isinstance(value, (str, int, float, bool)):
+        logger.warning("Skipping non-scalar message_bus.%s in %s", key, path)
+        return ""
+    return str(value).strip()
+
+
+def _message_bus_secret(
+    message_bus: dict[str, Any],
+    secrets: dict[str, Any],
+    reference_key: str,
+    identity: str | None,
+    path: str,
+) -> str:
+    secret_name = _message_bus_scalar(message_bus, reference_key, path)
+    if not secret_name or not identity:
+        return ""
+    secret_spec = secrets.get(secret_name)
+    if not isinstance(secret_spec, dict):
+        logger.warning("message_bus.%s references missing secret %r in %s", reference_key, secret_name, path)
+        return ""
+    return decrypt_named_secrets({secret_name: secret_spec}, identity=identity).get(secret_name, "")
+
+
+def _message_bus_secret_names(data: dict[str, Any]) -> set[str]:
+    message_bus = data.get("message_bus")
+    if not isinstance(message_bus, dict):
+        return set()
+    return {
+        _message_bus_scalar(message_bus, reference_key, "platform-config.yaml")
+        for reference_key in ("bot_token_secret", "app_token_secret", "action_callback_secret")
+    } - {""}
 
 
 def load_platform_runtime_env(path: str, *, model_selector: str | None = None) -> dict[str, str | None]:

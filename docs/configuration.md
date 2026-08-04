@@ -95,7 +95,7 @@ workflow bundles and agent-memory backups across supported deployment targets.
 | `GATEWAY_HOST` | `0.0.0.0` | Gateway bind address. |
 | `GATEWAY_PORT` | `8080` | Gateway bind port. |
 | `GATEWAY_EVENT_URL` | `http://gateway:8080/events` | Event-collector URL the runtime posts to. |
-| `GATEWAY_PUBLIC_BASE_URL` | `""` | Publicly reachable gateway URL (message-bus webhook callbacks). |
+| `GATEWAY_PUBLIC_BASE_URL` | `""` | Publicly reachable gateway URL for Mattermost approval-action callbacks. |
 | `CONTROL_PLANE_UI_URL` | `""` | Public control-plane UI URL. |
 
 ### Task admission
@@ -142,13 +142,88 @@ capacity when workflows use subagent fan-out.
 
 ### Message bus
 
-| Env var | Default | Purpose |
-| --- | --- | --- |
-| `MESSAGE_BUS_PROVIDER` | `mattermost` | `mattermost` or `slack`. Also settable via `platform-config.yaml`'s `message_bus.provider`. |
-| `MESSAGE_BUS_API_URL` | `""` | Message bus API base URL. |
-| `MESSAGE_BUS_TEAM_NAME` | `""` | Default team for message routing. |
-| `MESSAGE_BUS_BOT_TOKEN` | `""` | Bot token (normally supplied encrypted via `platform-config.yaml`'s `secrets:`). |
-| `MESSAGE_OUTGOING_WEBHOOK_SECRET` | `""` | Shared secret validating inbound webhook authenticity. |
+Configure the provider only in `platform-config.yaml`:
+
+```yaml
+message_bus:
+  provider: mattermost # mattermost or slack
+  api_url: https://mattermost.example.com
+  team_name: operations
+  bot_token_secret: message_bus_bot_token
+  app_token_secret: message_bus_app_token # Slack Socket Mode only
+  action_callback_secret: message_action_callback_secret # Mattermost actions only
+
+secrets:
+  message_bus_bot_token:
+    encrypted: "ENC[age,...]"
+  message_bus_app_token:
+    encrypted: "ENC[age,...]"
+  message_action_callback_secret:
+    encrypted: "ENC[age,...]"
+```
+
+Use exactly one of these provider mappings:
+
+```yaml
+# Mattermost
+message_bus:
+  provider: mattermost
+  api_url: https://mattermost.example.com
+  team_name: operations
+  bot_token_secret: message_bus_bot_token
+  action_callback_secret: message_action_callback_secret
+```
+
+```yaml
+# Slack
+message_bus:
+  provider: slack
+  api_url: https://slack.com/api
+  bot_token_secret: message_bus_bot_token
+  app_token_secret: message_bus_app_token
+```
+
+Mattermost needs a bot token, API URL, and an optional `team_name` when channel
+names are ambiguous. Its interactive approval buttons call
+`GATEWAY_PUBLIC_BASE_URL/webhooks/message/actions/approval`; configure an
+`action_callback_secret` for that internal callback. Remove any old Mattermost
+outgoing-webhook integration.
+
+Slack needs a bot token with `chat:write`, `channels:read`, and `groups:read`
+scopes (plus access to each configured channel), and a Socket Mode app token.
+Enable message events and interactive components in the Slack app. Slack does
+not use `action_callback_secret`: Socket Mode delivers the authenticated
+interactive action to the Gateway.
+
+Message-bus settings and secrets are never read from `MESSAGE_BUS_*`
+environment variables. The Gateway opens one listener for the configured
+`message_bus.provider`; no
+separate message connector service is deployed. Mattermost uses
+`/api/v4/websocket` for inbound posts and retains the Gateway HTTP
+approval-action callback. Slack uses Socket Mode for both message events and
+approval actions. The current deployment runs one gateway replica, because a
+second replica would create a second live provider consumer.
+
+`message_action_callback_secret` is an internal, independently generated
+gateway secret. Mattermost receives it only inside the approval button context
+and returns it to the approval callback. It is not a Mattermost token and is
+not used for WebSocket authentication.
+
+For `AskUserQuestion`, the runtime asks the gateway to post the prompt. When a
+provider inbound message arrives in the same provider/thread, gateway ingress
+persists a `user_question_reply` session event. The runtime polls the Gateway
+reply API for that event; it never polls Mattermost or Slack threads directly.
+
+Each workflow declares `messaging.channels` and `messaging.trigger_words` in
+its `agent.yaml`. A channel may be its provider name (for example,
+`operations`) or its provider ID. At gateway startup, configured names are
+resolved once to IDs visible to the bot, so incoming provider events route
+reliably even when they carry only a channel ID. Give the Slack bot access to
+the channel and the `conversations.list` scopes required to enumerate it;
+configure an explicit channel ID when the channel cannot be listed.
+Matching is case-insensitive and an inbound message must start with a configured
+trigger word. Omit neither `messaging.channels` nor `messaging.trigger_words`:
+without a matching channel and prefix, no task is created.
 
 ### Hindsight memory
 
@@ -270,8 +345,13 @@ memory:
     learning:
       my-workflow: workflow-learning-my-workflow
 
+message_bus:
+  provider: mattermost
+  api_url: https://mattermost.example.com
+  bot_token_secret: message_bus_bot_token
+
 secrets:              # age-encrypted platform-wide secrets
-  MESSAGE_BUS_BOT_TOKEN:
+  message_bus_bot_token:
     encrypted: "ENC[age,...]"
 ```
 

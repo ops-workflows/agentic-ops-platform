@@ -12,9 +12,12 @@ config:
   PG_DB: agentic_ops
   PG_USER: agentic_ops
   PG_PASSWORD: localdev-postgres-password
-  MESSAGE_BUS_API_URL: http://host.docker.internal:18065
-  MESSAGE_BUS_TEAM_NAME: test-team
   CONTROL_PLANE_UI_URL: http://localhost:3000
+
+message_bus:
+  provider: mattermost
+  api_url: http://host.docker.internal:18065
+  team_name: test-team
 
 runtime_env:
   ANTHROPIC_API_KEY: null

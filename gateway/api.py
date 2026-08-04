@@ -36,6 +36,7 @@ from gateway.scheduler import compute_next_run, register_schedule_job, unregiste
 from shared.lib.config import settings
 from shared.lib.db import async_session_factory
 from shared.lib.memory_catalog import BANK_INCIDENT_RCA, BANK_WORKFLOW_LEARNING, load_workflow_banks
+from shared.lib.message_bus import build_message_bus
 from shared.lib.models import Agent, Approval, BackgroundJobRun, Schedule, Session, SessionEvent, Task
 from shared.lib.object_store import BUCKET_AGENT_MEMORY, download_bytes, list_objects
 from shared.lib.platform_secrets import load_connector_instances
@@ -103,6 +104,21 @@ class CreateTaskRequest(BaseModel):
     metadata: dict[str, Any] | None = None
     message_channel: str | None = None
     message_thread: str | None = None
+
+
+class MessageReplyResponse(BaseModel):
+    message: str
+    user_id: str = ""
+    username: str = ""
+
+
+class TaskMessageRequest(BaseModel):
+    text: str
+
+
+class TaskMessageResponse(BaseModel):
+    post_id: str
+    thread_id: str
 
 
 class SessionDetailResponse(BaseModel):
@@ -1236,6 +1252,66 @@ async def create_task_api(body: CreateTaskRequest):
         )
 
     return _task_response(task)
+
+
+@router.get("/tasks/{task_id}/message-reply", response_model=MessageReplyResponse | None)
+async def get_message_reply(task_id: str, after_ms: int = 0):
+    """Return the first WebSocket-ingested human reply after a question prompt."""
+    after = datetime.fromtimestamp(after_ms / 1000, UTC) if after_ms > 0 else datetime.fromtimestamp(0, UTC)
+    async with async_session_factory() as session:
+        event = await session.scalar(
+            select(SessionEvent)
+            .where(
+                SessionEvent.task_id == uuid.UUID(task_id),
+                SessionEvent.event_type == "user_question_reply",
+                SessionEvent.timestamp > after,
+            )
+            .order_by(SessionEvent.timestamp.asc())
+            .limit(1)
+        )
+    if event is None or not isinstance(event.data, dict):
+        return None
+    return MessageReplyResponse(
+        message=str(event.data.get("message") or ""),
+        user_id=str(event.data.get("user_id") or ""),
+        username=str(event.data.get("username") or ""),
+    )
+
+
+@router.post("/tasks/{task_id}/message", response_model=TaskMessageResponse)
+async def post_task_message(task_id: str, body: TaskMessageRequest):
+    """Post a runtime message through the gateway-owned configured provider."""
+    async with async_session_factory() as session:
+        task = await session.get(Task, uuid.UUID(task_id))
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    metadata = task.task_metadata if isinstance(task.task_metadata, dict) else {}
+    thread_id = task.message_thread or ""
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+
+        async def client_factory() -> httpx.AsyncClient:
+            return client
+
+        message_bus = build_message_bus(
+            provider=settings.message_bus.provider,
+            client_factory=client_factory,
+            api_url=settings.message_bus.api_url,
+            bot_token=settings.message_bus.bot_token,
+            channel_id=str(metadata.get("channel_id") or ""),
+            channel_name=task.message_channel or "",
+            team_id=str(metadata.get("team_id") or ""),
+            team_name=str(metadata.get("team_domain") or metadata.get("team_name") or settings.message_bus.team_name),
+            get_thread_id=lambda: thread_id,
+            set_thread_id=lambda _thread_id: None,
+        )
+        posted = await message_bus.post_to_thread(body.text)
+
+    if posted is None:
+        detail = getattr(message_bus, "last_error", "") or "Message provider did not return a post"
+        raise HTTPException(status_code=503, detail=detail)
+    return TaskMessageResponse(post_id=posted.id, thread_id=posted.thread_id)
 
 
 @router.post("/tasks/{task_id}/rerun", response_model=TaskResetResponse)

@@ -277,7 +277,11 @@ async def test_undeliverable_question_reports_delivery_failure_and_interrupts(mo
 
     assert "Unable to deliver" in result.message
     assert result.interrupt is True
-    assert [event_type for event_type, _data in events] == ["permission_callback", "user_question_delivery_failed"]
+    assert [event_type for event_type, _data in events] == [
+        "permission_callback",
+        "user_question_requested",
+        "user_question_delivery_failed",
+    ]
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from types import SimpleNamespace
 
@@ -50,3 +51,21 @@ async def test_failed_approval_delivery_keeps_request_pending(monkeypatch) -> No
     assert updated is approval
     assert approval.status == "pending"
     assert approval.approval_metadata["gateway_delivery"]["error"] == "Mattermost is unavailable"
+
+
+def test_slack_approval_payload_has_provider_action_context() -> None:
+    task = SimpleNamespace(id=uuid.uuid4(), prompt="Investigate", workflow="platform-test")
+    approval = SimpleNamespace(
+        id=uuid.uuid4(),
+        task_id=task.id,
+        workflow=task.workflow,
+        tool_name="Bash",
+        request_preview="echo approval-needed",
+        approval_metadata={"approval_requested": {"request_id": "request-1"}},
+    )
+
+    _text, blocks = approval_broker._slack_approval_post_payload(task, approval)
+
+    actions = blocks[1]["elements"]
+    assert {json.loads(action["value"])["decision"] for action in actions} == {"approve", "reject"}
+    assert all("token" not in json.loads(action["value"]) for action in actions)

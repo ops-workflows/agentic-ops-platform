@@ -11,7 +11,7 @@
    - Replace all `{PLACEHOLDER}` values
    - Configure workflow-local secrets, schedules, and messaging bindings
 
-3. Configure platform-level credentials such as `MESSAGE_BUS_BOT_TOKEN` in `platform-config.yaml`
+3. Configure the platform-level `message_bus` block and its encrypted secret references in `platform-config.yaml`
 
 4. Edit `.mcp.json` with MCP server URLs, auth headers, and session headers
 

@@ -24,6 +24,21 @@ def _normalize_channel_name(channel_name: str) -> str:
     return channel_name.strip().lstrip("#")
 
 
+async def get_authenticated_user_id(
+    client: httpx.AsyncClient,
+    *,
+    api_url: str,
+    bot_token: str,
+) -> str:
+    """Return the Mattermost user id represented by a bot token."""
+    response = await client.get(
+        f"{api_url.rstrip('/')}/api/v4/users/me",
+        headers=_auth_headers(bot_token),
+    )
+    response.raise_for_status()
+    return str(response.json().get("id") or "")
+
+
 async def _get_channel_by_team_id(
     client: httpx.AsyncClient,
     *,
@@ -127,7 +142,7 @@ async def resolve_channel_id(
     if len(matches) > 1:
         raise MattermostAPIError(
             f"Mattermost channel '{normalized_channel_name}' is ambiguous across multiple teams; "
-            "set MESSAGE_BUS_TEAM_NAME or store the channel id on the task"
+            "set message_bus.team_name or store the channel id on the task"
         )
 
     raise MattermostAPIError(

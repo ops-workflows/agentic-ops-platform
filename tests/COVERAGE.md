@@ -29,9 +29,9 @@ The table below shows which feature groups are covered at each layer.
 
 | Group | Coverage baseline | Unit | Service | Runtime | Primary tests |
 |---|---|:---:|:---:|:---:|---|
-| Intake and routing | Message webhook intake, schedules, connectors, API task creation, workflow handoff, alert coalescing | ✅ | ✅ | — | `test_message_webhook_helpers.py`, `test_gateway_api.py`, `test_task_queue.py::test_coalesce_merges_into_existing_task`, `test_scheduler_and_pause.py::test_schedule_handler_creates_task_and_updates_last_run` |
+| Intake and routing | Gateway message ingress, schedules, connectors, API task creation, workflow handoff, alert coalescing | ✅ | ✅ | — | `test_message_ingress.py`, `test_gateway_api.py`, `test_task_queue.py::test_coalesce_merges_into_existing_task`, `test_scheduler_and_pause.py::test_schedule_handler_creates_task_and_updates_last_run` |
 | Runtime and workspace | real Claude SDK/CLI invocation, staged writable workspace, shared `CLAUDE.md`, shared skills, shared hook executables, plugin-local files | — | ✅ (provisioner only) | ✅ | `test_provisioner.py`, `test_test_plugin_fixture.py`, `test_plugin_dir.py`, `tests/runtime/test_happy_path_scenario.py`, `tests/runtime/test_instruction_surface_scenario.py` |
-| Human-in-the-loop | approval requests, approval rejection, `AskUserQuestion`, late-session question reminder, thread polling | ✅ | ✅ | ✅ | `test_approvals_helpers.py`, `test_budget_reminder.py`, `test_concurrent_approvals.py`, `test_event_collector.py::test_approval_requested_creates_pending_approval`, `tests/runtime/test_approval_scenario.py`, `tests/runtime/test_subagent_and_questions_scenario.py` |
+| Human-in-the-loop | approval requests, approval rejection, `AskUserQuestion`, late-session question reminder, gateway-correlated message replies | ✅ | ✅ | ✅ | `test_approvals_helpers.py`, `test_budget_reminder.py`, `test_concurrent_approvals.py`, `test_gateway_api.py::test_message_reply_endpoint_returns_websocket_ingested_reply`, `test_event_collector.py::test_approval_requested_creates_pending_approval`, `tests/runtime/test_approval_scenario.py`, `tests/runtime/test_subagent_and_questions_scenario.py` |
 | Queue and lifecycle | Postgres queueing, dequeue concurrency, container spawn, heartbeat, lost-task detection, runtime timeout, manual rerun | — | ✅ | ✅ | `test_task_queue.py` (all 6), `test_event_collector.py::test_session_timeout_marks_timed_out`, `test_container_lifecycle_helpers.py`, `tests/runtime/test_timeout_scenario.py`, `tests/runtime/test_lifecycle_scenario.py` |
 | Memory and learning | Hindsight recall/retain/reflect, hook-driven recall/retain, project-memory restore from MinIO, project-memory backup to MinIO | ✅ | ✅ | ✅ | `test_memory_catalog.py`, `test_memory_sync.py`, `test_connectors_and_hindsight_helpers.py` (hindsight helpers), `test_fakes.py::test_fake_hindsight_records_retain_and_scripted_recall`, `test_platform_catalogs.py::test_platform_memories_endpoint_returns_shape`, `tests/runtime/test_memory_scenario.py` |
 | MCP integration | Message, Hindsight, Platform, test MCP server, header expansion from env and secrets, tool result propagation | ✅ | ✅ | ✅ | `test_plugin_dir.py::test_validate_plugin_dir_*`, `test_test_plugin_fixture.py::test_plugin_mcp_json_references_testserver`, `test_platform_catalogs.py::test_platform_mcp_endpoint_returns_catalog`, `tests/runtime/test_mcp_header_scenario.py`, `tests/runtime/test_mcp_variants_scenario.py` |
@@ -242,12 +242,12 @@ the behavior is fully verified via unit or service tests with mocks and fakes.
 | subagent-no-output retry text | `tests/unit/test_budget_reminder.py::test_subagent_no_output_retry_text` |
 | question-response parser (single, free-text, multi, out-of-range) | `tests/unit/test_budget_reminder.py::test_parse_question_response_*` (4 tests) |
 
-#### Thread polling and mid-session user messages
+#### Message ingress and mid-session user messages
 
 | Case | Coverage |
 |---|---|
-| webhook trigger-word / comment-shape helpers | `tests/unit/test_message_webhook_helpers.py::test_comment_response_shape`, `::test_strip_trigger_word_*` |
-| end-to-end thread polling | Layer 2 (runtime image required) |
+| Mattermost WebSocket and Slack Socket Mode event parsing | `tests/unit/test_message_ingress.py` |
+| gateway-correlated Mattermost and Slack AskUserQuestion replies | Layer 2 (runtime image required) |
 
 #### Concurrent approvals and `AskUserQuestion` in one session
 

@@ -27,17 +27,17 @@ async def test_gateway_owned_approval_request_and_callback_resolution(db_session
     fake_mattermost = FakeMattermost()
     server = run_app_in_background(fake_mattermost.app)
 
-    original_message_bus_api_url = settings.message_bus_api_url
-    original_message_bus_bot_token = settings.message_bus_bot_token
-    original_message_bus_team_name = settings.message_bus_team_name
+    original_message_bus_api_url = settings.message_bus.api_url
+    original_message_bus_bot_token = settings.message_bus.bot_token
+    original_message_bus_team_name = settings.message_bus.team_name
     original_gateway_public_base_url = settings.gateway_public_base_url
-    original_message_outgoing_webhook_secret = settings.message_outgoing_webhook_secret
+    original_message_action_callback_secret = settings.message_bus.action_callback_secret
 
-    settings.message_bus_api_url = server.base_url
-    settings.message_bus_bot_token = "test-bot-token"
-    settings.message_bus_team_name = "test-team"
+    settings.message_bus.api_url = server.base_url
+    settings.message_bus.bot_token = "test-bot-token"
+    settings.message_bus.team_name = "test-team"
     settings.gateway_public_base_url = "http://127.0.0.1:8080"
-    settings.message_outgoing_webhook_secret = "test-shared-secret"
+    settings.message_bus.action_callback_secret = "test-shared-secret"
 
     try:
         task = Task(
@@ -91,11 +91,11 @@ async def test_gateway_owned_approval_request_and_callback_resolution(db_session
         assert status.status == "approved"
         assert status.resolved_by_user_id == "operator-user"
     finally:
-        settings.message_bus_api_url = original_message_bus_api_url
-        settings.message_bus_bot_token = original_message_bus_bot_token
-        settings.message_bus_team_name = original_message_bus_team_name
+        settings.message_bus.api_url = original_message_bus_api_url
+        settings.message_bus.bot_token = original_message_bus_bot_token
+        settings.message_bus.team_name = original_message_bus_team_name
         settings.gateway_public_base_url = original_gateway_public_base_url
-        settings.message_outgoing_webhook_secret = original_message_outgoing_webhook_secret
+        settings.message_bus.action_callback_secret = original_message_action_callback_secret
         server.stop()
 
 

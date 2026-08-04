@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -14,6 +15,8 @@ from shared.lib.approvals import apply_approval_event, find_approval_by_request
 from shared.lib.config import settings
 from shared.lib.mattermost_api import MattermostAPIError, create_post
 from shared.lib.models import Approval, SessionEvent, Task
+from shared.lib.slack_api import SlackAPIError
+from shared.lib.slack_api import create_post as create_slack_post
 
 logger = logging.getLogger(__name__)
 
@@ -32,16 +35,23 @@ def _session_details_url(task_id: uuid.UUID) -> str | None:
     return f"{base}/sessions/{task_id}"
 
 
-def _approval_action_context(approval: Approval, *, decision: str) -> dict[str, Any]:
+def _approval_action_context(
+    approval: Approval,
+    *,
+    decision: str,
+    include_callback_secret: bool = True,
+) -> dict[str, Any]:
     approval_requested = (approval.approval_metadata or {}).get("approval_requested", {})
-    return {
+    context = {
         "approval_id": str(approval.id),
         "task_id": str(approval.task_id),
         "tool_name": approval.tool_name,
         "request_id": str(approval_requested.get("request_id") or ""),
         "decision": decision,
-        "token": settings.message_outgoing_webhook_secret,
     }
+    if include_callback_secret:
+        context["token"] = settings.message_bus.action_callback_secret
+    return context
 
 
 def _approval_post_payload(task: Task, approval: Approval) -> tuple[str, dict[str, Any]]:
@@ -95,6 +105,36 @@ def _approval_post_payload(task: Task, approval: Approval) -> tuple[str, dict[st
         ]
     }
     return "\n".join(lines), props
+
+
+def _slack_approval_post_payload(task: Task, approval: Approval) -> tuple[str, list[dict[str, Any]]]:
+    text, _ = _approval_post_payload(task, approval)
+    return text, [
+        {"type": "section", "text": {"type": "mrkdwn", "text": text}},
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Approve"},
+                    "style": "primary",
+                    "action_id": "agentic_ops_approval",
+                    "value": json.dumps(
+                        _approval_action_context(approval, decision="approve", include_callback_secret=False)
+                    ),
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Reject"},
+                    "style": "danger",
+                    "action_id": "agentic_ops_approval",
+                    "value": json.dumps(
+                        _approval_action_context(approval, decision="reject", include_callback_secret=False)
+                    ),
+                },
+            ],
+        },
+    ]
 
 
 async def record_approval_result(
@@ -172,30 +212,38 @@ async def ensure_approval_prompt_posted(
         approval.updated_at = datetime.now(UTC)
         return approval
 
-    text, props = _approval_post_payload(task, approval)
     channel_id = str(task.task_metadata.get("channel_id") or "")
     team_id = str(task.task_metadata.get("team_id") or "")
-    team_name = str(task.task_metadata.get("team_domain") or settings.message_bus_team_name or "")
+    team_name = str(task.task_metadata.get("team_domain") or settings.message_bus.team_name or "")
 
-    # Interactive approval prompts use Mattermost message `props` (buttons), which
-    # are provider-specific UI. This path stays on the Mattermost adapter directly
-    # until an equivalent Slack interactivity/ingress integration exists; plain
-    # notifications go through the provider-neutral message bus instead.
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
-            post = await create_post(
-                client,
-                api_url=settings.message_bus_api_url,
-                bot_token=settings.message_bus_bot_token,
-                text=text,
-                channel_id=channel_id,
-                channel_name=task.message_channel or "",
-                team_id=team_id,
-                team_name=team_name,
-                root_id=task.message_thread or "",
-                props=props,
-            )
-        except (MattermostAPIError, httpx.HTTPError) as exc:
+            if settings.message_bus.provider == "slack":
+                text, blocks = _slack_approval_post_payload(task, approval)
+                post = await create_slack_post(
+                    client,
+                    api_url=settings.message_bus.api_url,
+                    bot_token=settings.message_bus.bot_token,
+                    channel_id=channel_id or task.message_channel or "",
+                    text=text,
+                    thread_id=task.message_thread or "",
+                    blocks=blocks,
+                )
+            else:
+                text, props = _approval_post_payload(task, approval)
+                post = await create_post(
+                    client,
+                    api_url=settings.message_bus.api_url,
+                    bot_token=settings.message_bus.bot_token,
+                    text=text,
+                    channel_id=channel_id,
+                    channel_name=task.message_channel or "",
+                    team_id=team_id,
+                    team_name=team_name,
+                    root_id=task.message_thread or "",
+                    props=props,
+                )
+        except (MattermostAPIError, SlackAPIError, httpx.HTTPError) as exc:
             logger.warning("Failed to post approval prompt for %s: %s", approval.tool_name, exc)
             metadata = approval.approval_metadata or {}
             metadata["gateway_delivery"] = {
@@ -208,9 +256,9 @@ async def ensure_approval_prompt_posted(
 
     metadata = approval.approval_metadata or {}
     metadata["gateway_delivery"] = {
-        "post_id": str(post.get("id") or ""),
-        "root_id": str(post.get("root_id") or ""),
-        "channel_id": str(post.get("channel_id") or channel_id),
+        "post_id": str(post.get("id") or post.get("ts") or ""),
+        "root_id": str(post.get("root_id") or task.message_thread or ""),
+        "channel_id": str(post.get("channel_id") or channel_id or task.message_channel or ""),
         "posted_at": datetime.now(UTC).isoformat(),
     }
     approval.approval_metadata = metadata

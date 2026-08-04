@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -12,6 +10,8 @@ from typing import Any, Protocol
 import httpx
 
 from shared.lib.mattermost_api import MattermostAPIError, create_post
+from shared.lib.slack_api import SlackAPIError
+from shared.lib.slack_api import create_post as create_slack_post
 
 logger = logging.getLogger(__name__)
 
@@ -23,24 +23,8 @@ class MessageRef:
     raw: dict[str, Any]
 
 
-@dataclass(frozen=True)
-class MessageReply:
-    message: str
-    user_id: str = ""
-    username: str = ""
-    raw: dict[str, Any] | None = None
-
-
 class MessageBus(Protocol):
     async def post_to_thread(self, text: str) -> MessageRef | None: ...
-
-    async def wait_for_reply(
-        self,
-        *,
-        started_after_ms: int,
-        ignore_message_ids: set[str] | None = None,
-        timeout_sec: int = 3600,
-    ) -> MessageReply | None: ...
 
 
 class MattermostMessageBus:
@@ -103,73 +87,6 @@ class MattermostMessageBus:
             self.set_thread_id(thread_id)
         return MessageRef(id=message_id, thread_id=thread_id, raw=post)
 
-    async def wait_for_reply(
-        self,
-        *,
-        started_after_ms: int,
-        ignore_message_ids: set[str] | None = None,
-        timeout_sec: int = 3600,
-    ) -> MessageReply | None:
-        if not self.bot_token or not self.get_thread_id():
-            return None
-
-        client = await self.client_factory()
-        deadline = time.time() + timeout_sec
-
-        while time.time() < deadline:
-            resp = await client.get(
-                f"{self.api_url}/api/v4/posts/{self.get_thread_id()}/thread",
-                headers={"Authorization": f"Bearer {self.bot_token}"},
-                timeout=30,
-            )
-            resp.raise_for_status()
-            reply = _first_human_reply(resp.json(), started_after_ms, ignore_message_ids or set())
-            if reply:
-                return reply
-            await asyncio.sleep(5)
-
-        return None
-
-
-def _first_human_reply(
-    payload: dict[str, Any], started_after_ms: int, ignore_message_ids: set[str]
-) -> MessageReply | None:
-    posts = payload.get("posts", {})
-    users = payload.get("users", {}) if isinstance(payload.get("users"), dict) else {}
-    ordered_posts = sorted(posts.values(), key=lambda post: post.get("create_at", 0))
-    for post in ordered_posts:
-        if post.get("create_at", 0) <= started_after_ms:
-            continue
-        post_id = str(post.get("id") or "")
-        if post_id and post_id in ignore_message_ids:
-            continue
-        message = (post.get("message") or "").strip()
-        if not message:
-            continue
-        user_id = str(post.get("user_id") or "").strip()
-        return MessageReply(
-            message=message,
-            user_id=user_id,
-            username=_username_for_user(users.get(user_id) if user_id else None),
-            raw=post,
-        )
-    return None
-
-
-def _username_for_user(profile: Any) -> str:
-    if not isinstance(profile, dict):
-        return ""
-    username = str(profile.get("username") or "").strip()
-    if username:
-        return username
-    email = str(profile.get("email") or "").strip()
-    if email:
-        return email
-    first_name = str(profile.get("first_name") or "").strip()
-    last_name = str(profile.get("last_name") or "").strip()
-    return f"{first_name} {last_name}".strip()
-
-
 class SlackMessageBus:
     """Slack-backed MessageBus implementation using the Web API."""
 
@@ -184,7 +101,7 @@ class SlackMessageBus:
         set_thread_id: Callable[[str], None],
     ) -> None:
         self.client_factory = client_factory
-        self.api_url = (api_url or "https://slack.com/api").rstrip("/")
+        self.api_url = api_url.strip().rstrip("/")
         self.bot_token = bot_token
         self.channel = channel
         self.get_thread_id = get_thread_id
@@ -196,25 +113,17 @@ class SlackMessageBus:
 
         client = await self.client_factory()
         thread_ts = self.get_thread_id()
-        body: dict[str, Any] = {"channel": self.channel, "text": text}
-        if thread_ts:
-            body["thread_ts"] = thread_ts
-
         try:
-            response = await client.post(
-                f"{self.api_url}/chat.postMessage",
-                json=body,
-                headers={"Authorization": f"Bearer {self.bot_token}"},
-                timeout=30,
+            payload = await create_slack_post(
+                client,
+                api_url=self.api_url,
+                bot_token=self.bot_token,
+                channel_id=self.channel,
+                text=text,
+                thread_id=thread_ts,
             )
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
+        except (SlackAPIError, httpx.HTTPError) as exc:
             logger.warning("Failed to post Slack message: %s", exc)
-            return None
-
-        payload = response.json()
-        if not payload.get("ok"):
-            logger.warning("Slack chat.postMessage rejected: %s", payload.get("error"))
             return None
 
         message_ts = str(payload.get("ts") or "")
@@ -222,66 +131,6 @@ class SlackMessageBus:
         if resolved_thread and not thread_ts:
             self.set_thread_id(resolved_thread)
         return MessageRef(id=message_ts, thread_id=resolved_thread, raw=payload)
-
-    async def wait_for_reply(
-        self,
-        *,
-        started_after_ms: int,
-        ignore_message_ids: set[str] | None = None,
-        timeout_sec: int = 3600,
-    ) -> MessageReply | None:
-        thread_ts = self.get_thread_id()
-        if not self.bot_token or not self.channel or not thread_ts:
-            return None
-
-        client = await self.client_factory()
-        deadline = time.time() + timeout_sec
-
-        while time.time() < deadline:
-            response = await client.get(
-                f"{self.api_url}/conversations.replies",
-                params={"channel": self.channel, "ts": thread_ts},
-                headers={"Authorization": f"Bearer {self.bot_token}"},
-                timeout=30,
-            )
-            response.raise_for_status()
-            reply = _first_slack_human_reply(response.json(), thread_ts, started_after_ms, ignore_message_ids or set())
-            if reply:
-                return reply
-            await asyncio.sleep(5)
-
-        return None
-
-
-def _first_slack_human_reply(
-    payload: dict[str, Any], thread_ts: str, started_after_ms: int, ignore_message_ids: set[str]
-) -> MessageReply | None:
-    messages = payload.get("messages", [])
-    if not isinstance(messages, list):
-        return None
-    for message in messages:
-        if not isinstance(message, dict):
-            continue
-        ts = str(message.get("ts") or "")
-        if not ts or ts == thread_ts:
-            continue
-        if message.get("bot_id") or message.get("subtype"):
-            continue
-        if ts in ignore_message_ids:
-            continue
-        try:
-            created_ms = int(float(ts) * 1000)
-        except ValueError:
-            continue
-        if created_ms <= started_after_ms:
-            continue
-        text = str(message.get("text") or "").strip()
-        if not text:
-            continue
-        user_id = str(message.get("user") or "").strip()
-        return MessageReply(message=text, user_id=user_id, username=user_id, raw=message)
-    return None
-
 
 def build_message_bus(
     *,
@@ -297,7 +146,7 @@ def build_message_bus(
     team_name: str = "",
 ) -> MessageBus:
     """Build the MessageBus implementation for the configured provider."""
-    normalized = (provider or "mattermost").strip().lower()
+    normalized = provider.strip().lower()
     if normalized == "mattermost":
         return MattermostMessageBus(
             client_factory=client_factory,

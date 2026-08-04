@@ -11,7 +11,7 @@ through them end to end.
 The FastAPI control plane and the platform's single HTTP entry point. It
 serves the `/api/*` control-plane API consumed by the UI (agents, tasks,
 sessions, schedules, approvals, analytics, catalogs, and workflow-repo
-sync/versioning), ingests message-bus webhooks, and collects the structured
+sync/versioning), owns the configured message-bus listener, and collects the structured
 event stream that runtime containers emit — persisting it as the session
 timeline and updating task token/duration counters. It also brokers human
 approvals, provisions agents by discovering `workflows/*/agent.yaml`, and runs
@@ -80,7 +80,7 @@ Covered in their own docs: [MCP servers](mcps.md) and [Connectors](connectors.md
 flowchart LR
     subgraph Ingestion
         C[Connector] -->|create_task| Q[(task_queue.tasks)]
-        W[Message bus webhook] -->|create_task| Q
+      W[Gateway message ingress] -->|create_task| Q
         S[Scheduler] -->|cron fire| Q
     end
 
@@ -101,7 +101,7 @@ flowchart LR
 ```
 
 1. A task is created in `task_queue.tasks` (status `queued`) by a connector,
-   a message-bus webhook, or the scheduler firing a cron-defined schedule.
+   gateway-owned message ingress, or the scheduler firing a cron-defined schedule.
 2. session-manager dequeues it, resolves (or builds) the workflow's bundle,
    and launches a runtime container with the bundle contract env vars
    (`WORKFLOW_BUNDLE_PATH` / `WORKFLOW_BUNDLE_URI` / `WORKFLOW_BUNDLE_CHECKSUM`,

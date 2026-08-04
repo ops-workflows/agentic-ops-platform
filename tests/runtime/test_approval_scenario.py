@@ -14,6 +14,7 @@ Requires:
 from __future__ import annotations
 
 import asyncio
+import json
 
 import httpx
 import pytest
@@ -62,6 +63,55 @@ async def _click_approval_action(fake_mattermost, gateway_server, *, decision: s
             },
         )
     assert response.status_code == 200, response.text
+
+
+async def _click_slack_approval_action(fake_mattermost, *, decision: str, task_id: str) -> None:
+    def _wait_for_action():
+        for_post = fake_mattermost.wait_for_post(
+            lambda candidate: any(
+                action.get("action_id") == "agentic_ops_approval"
+                and json.loads(str(action.get("value") or "{}")).get("task_id") == task_id
+                and json.loads(str(action.get("value") or "{}")).get("decision") == decision
+                for block in (candidate.props or {}).get("blocks", [])
+                for action in block.get("elements", [])
+                if isinstance(action, dict)
+            ),
+            timeout=60.0,
+        )
+        if for_post is None:
+            return None
+        for block in (for_post.props or {}).get("blocks", []):
+            for action in block.get("elements", []):
+                if not isinstance(action, dict):
+                    continue
+                context = json.loads(str(action.get("value") or "{}"))
+                if action.get("action_id") == "agentic_ops_approval" and context.get("decision") == decision:
+                    return for_post, context
+        return None
+
+    match = await asyncio.get_event_loop().run_in_executor(None, _wait_for_action)
+    assert match is not None, f"Timed out waiting for Slack {decision} approval button"
+    post, context = match
+
+    from gateway.message_ingress import GatewayMessageIngress
+    from shared.lib.message_ingress import InteractiveAction
+
+    ingress = GatewayMessageIngress()
+    try:
+        await ingress.handle_event(
+            InteractiveAction(
+                provider="slack",
+                action_id="agentic_ops_approval",
+                context=context,
+                post_id=post.id,
+                channel_id=post.channel_id,
+                team_id="test-team-id",
+                user_id="operator-user",
+                username="operator",
+            )
+        )
+    finally:
+        await ingress.stop()
 
 
 @pytest.mark.asyncio
@@ -196,3 +246,52 @@ async def test_approval_reject(
 
     # The container should still exit (the LLM concludes after rejection)
     assert exit_code == 0, f"Container exited with code {exit_code}.\nLogs:\n{logs}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("decision", ["approve", "reject"])
+async def test_slack_approval_resolution(
+    decision,
+    require_runtime,
+    patched_settings,
+    mock_llm,
+    fake_mattermost,
+    admit_when_resume_pending,
+    create_task,
+    spawn_and_wait,
+) -> None:
+    """Slack Socket Mode actions resolve gateway-owned approvals in both directions."""
+    patched_settings.message_bus.provider = "slack"
+    final_text = "Command approved and executed successfully." if decision == "approve" else "The command was rejected."
+    mock_llm.set_scenario(
+        [
+            Turn(
+                respond=[
+                    {
+                        "type": "tool_use",
+                        "name": "Bash",
+                        "input": {"command": "echo approval-needed slack-test"},
+                    }
+                ],
+                stop_reason="tool_use",
+            ),
+            Turn(respond=[{"type": "text", "text": final_text}], stop_reason="end_turn"),
+        ]
+    )
+    task = await create_task(
+        prompt=f"Run a Slack approval test that will be {decision}d.",
+        channel="slack",
+        message_channel="C123",
+        message_thread="slack-approval-thread",
+    )
+    click_task = asyncio.create_task(
+        _click_slack_approval_action(fake_mattermost, decision=decision, task_id=str(task.id))
+    )
+    admit_task = asyncio.create_task(admit_when_resume_pending(task.id, workflow=task.workflow, timeout=120))
+
+    exit_code, logs = await spawn_and_wait(task, timeout_sec=120)
+    await click_task
+    await admit_task
+
+    assert exit_code == 0, f"Container exited with code {exit_code}.\nLogs:\n{logs}"
+    assert any(request["op"] == "slack_update_post" for request in fake_mattermost.state.received_requests)

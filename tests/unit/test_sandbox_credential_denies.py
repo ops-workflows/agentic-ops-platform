@@ -29,13 +29,13 @@ from runtime.session_entrypoint import (  # noqa: E402
 
 def test_discovered_secrets_become_sorted_deny_entries():
     out = _build_credential_envvars(
-        discovered_names={"CRM_TOKEN", "JIRA_TOKEN", "MESSAGE_BUS_BOT_TOKEN"},
+        discovered_names={"CRM_TOKEN", "JIRA_TOKEN", "PLATFORM_TOKEN"},
         existing_entries=[],
     )
     assert out == [
         {"name": "CRM_TOKEN", "mode": "deny"},
         {"name": "JIRA_TOKEN", "mode": "deny"},
-        {"name": "MESSAGE_BUS_BOT_TOKEN", "mode": "deny"},
+        {"name": "PLATFORM_TOKEN", "mode": "deny"},
     ]
 
 

@@ -16,7 +16,7 @@ from tests.fakes.mock_llm import Turn, build_mock_llm
 pytestmark = pytest.mark.unit
 
 
-def test_fake_mattermost_records_posts_and_returns_thread(background_app) -> None:
+def test_fake_mattermost_records_posts(background_app) -> None:
     fake = build_fake_mattermost()
     server = background_app(fake.app)
 
@@ -29,20 +29,7 @@ def test_fake_mattermost_records_posts_and_returns_thread(background_app) -> Non
         post = resp.json()
         assert post["channel_id"] == "chan-1"
 
-        # Inject a scripted reply in that thread
-        fake.inject_reply(
-            thread_id=post["id"],
-            channel_id="chan-1",
-            message="ack",
-            user_id="u1",
-            username="op",
-        )
-
-        thread = client.get(f"/api/v4/posts/{post['id']}/thread").json()
-        assert len(thread["order"]) == 2
-        messages = [thread["posts"][pid]["message"] for pid in thread["order"]]
-        assert "hello" in messages
-        assert "ack" in messages
+        assert fake.posts_in_thread(post["id"])[0].message == "hello"
 
 
 def test_fake_mattermost_rejects_missing_channel(background_app) -> None:
@@ -51,6 +38,17 @@ def test_fake_mattermost_rejects_missing_channel(background_app) -> None:
     with httpx.Client(base_url=server.base_url, timeout=5) as client:
         resp = client.post("/api/v4/posts", json={"message": "x"})
         assert resp.status_code == 400
+
+
+def test_fake_message_provider_supports_slack_post_and_update(background_app) -> None:
+    fake = build_fake_mattermost()
+    server = background_app(fake.app)
+    with httpx.Client(base_url=server.base_url, timeout=5) as client:
+        created = client.post("/chat.postMessage", json={"channel": "C123", "text": "hello"}).json()
+        assert created["ok"] is True
+        updated = client.post("/chat.update", json={"channel": "C123", "ts": created["ts"], "text": "resolved"}).json()
+        assert updated["ok"] is True
+    assert fake.all_posts()[0].message == "resolved"
 
 
 def test_fake_hindsight_records_retain_and_scripted_recall(background_app) -> None:
