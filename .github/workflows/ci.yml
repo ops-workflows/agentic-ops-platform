@@ -58,7 +58,7 @@ jobs:
 
       - name: Run full test suite
         run: >-
-          make test
+          make tests
           SANDBOX_MODE=gha
           PYTEST_FLAGS="-vv -ra${{ inputs.runtime_diagnostics && ' --durations=25' || '' }}"
         env:

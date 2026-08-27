@@ -6,6 +6,7 @@ import asyncio
 import logging
 import sys
 from typing import Annotated, Any
+from urllib.parse import urlparse
 
 import httpx
 from fastmcp import FastMCP
@@ -55,6 +56,13 @@ def _append_task_footer(text: str, headers: dict[str, str]) -> str:
     if task_id:
         return f"{text}\n\n_Task: `{task_id[:8]}`_"
     return text
+
+
+def _gateway_tasks_url() -> str:
+    parsed = urlparse(GATEWAY_URL)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("GATEWAY_URL must be an absolute http:// or https:// URL")
+    return f"{GATEWAY_URL.rstrip('/')}/tasks"
 
 
 async def _post_message_async(
@@ -171,6 +179,11 @@ def handoff_task(
     subagent in the current investigation. Use the built-in Agent and SendMessage
     tools for internal specialist work.
     """
+    try:
+        tasks_url = _gateway_tasks_url()
+    except ValueError as exc:
+        return {"error": str(exc)}
+
     resolved_channel = _resolve_channel(channel, headers)
     resolved_channel_id = _resolve_channel_id(channel_id, headers)
     resolved_thread = _resolve_thread(thread_id, headers)
@@ -193,20 +206,24 @@ def handoff_task(
         payload_metadata.setdefault("source_workflow", headers["x-task-workflow"])
     payload_metadata.setdefault("handoff_post_id", posted.get("post_id", ""))
 
-    with httpx.Client(timeout=30.0) as client:
-        response = client.post(
-            f"{GATEWAY_URL}/tasks",
-            json={
-                "workflow": workflow,
-                "prompt": prompt,
-                "channel": "message",
-                "metadata": payload_metadata,
-                "message_channel": resolved_channel,
-                "message_thread": resolved_thread or None,
-            },
-        )
-        response.raise_for_status()
-        created_task = response.json()
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(
+                tasks_url,
+                json={
+                    "workflow": workflow,
+                    "prompt": prompt,
+                    "channel": "message",
+                    "metadata": payload_metadata,
+                    "message_channel": resolved_channel,
+                    "message_thread": resolved_thread or None,
+                },
+            )
+            response.raise_for_status()
+            created_task = response.json()
+    except httpx.HTTPError as exc:
+        logger.error("Workflow handoff task creation failed: %s", exc)
+        return {"error": f"Workflow handoff task creation failed: {exc}"}
 
     return {"success": True, "task_id": created_task.get("id", ""), "post_id": posted.get("post_id", "")}
 

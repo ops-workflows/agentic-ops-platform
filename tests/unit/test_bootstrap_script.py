@@ -5,18 +5,33 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 
 from scripts.bootstrap import (
     BootstrapConfig,
     build_bootstrap_env,
     main,
     normalize_age_identity,
+    prepare_workflow_repo,
     render_compose_env,
     render_k8s_secret_script,
     write_artifact,
 )
 
 pytestmark = pytest.mark.unit
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_session_manager_receives_knowledge_source_bucket_in_compose_and_helm():
+    compose = yaml.safe_load((REPO_ROOT / "deploy/docker-compose.yml").read_text(encoding="utf-8"))
+    session_manager_env = compose["services"]["session-manager"]["environment"]
+    assert session_manager_env["OBJECT_STORE_ENDPOINT"] == "minio:9000"
+    assert "OBJECT_STORE_ACCESS_KEY" in session_manager_env
+    assert "KNOWLEDGE_SOURCE_OBJECT_STORE_BUCKET" in session_manager_env
+
+    helm_template = (REPO_ROOT / "deploy/k8s/agentic-ops/templates/session-manager.yaml").read_text(encoding="utf-8")
+    assert "name: KNOWLEDGE_SOURCE_OBJECT_STORE_BUCKET" in helm_template
+    assert "value: {{ .Values.knowledgeSources.objectStoreBucket | quote }}" in helm_template
 
 
 def _remote_config(**overrides) -> BootstrapConfig:
@@ -26,6 +41,7 @@ def _remote_config(**overrides) -> BootstrapConfig:
         "repo_url": "https://github.com/acme/workflows.git",
         "repo_ref": "v1.2.3",
         "repo_pat": "ghp_token",
+        "local_path": "/home/op/corp-workflows",
         "age_identity": "AGE-SECRET-KEY-1EXAMPLE",
         "llm_api_key": "sk-model-key",
         "pg_password": "postgres-secret",
@@ -52,10 +68,8 @@ def _local_config(**overrides) -> BootstrapConfig:
 # ── Validation ──────────────────────────────────────────────────────
 
 
-def test_validate_rejects_remote_source_for_compose_target():
-    config = _remote_config(target="compose")
-    with pytest.raises(ValueError, match="bind-mount a local workflow-repo checkout"):
-        config.validate()
+def test_validate_accepts_remote_source_for_compose_target():
+    _remote_config(target="compose").validate()
 
 
 def test_validate_requires_repo_url_for_remote_source():
@@ -117,7 +131,7 @@ def test_build_bootstrap_env_remote_source_includes_repo_pointer():
     env = build_bootstrap_env(_remote_config())
     assert env["WORKFLOW_REPO_URL"] == "https://github.com/acme/workflows.git"
     assert env["WORKFLOW_REPO_REF"] == "v1.2.3"
-    assert env["WORKFLOW_REPO_PAT"] == "ghp_token"
+    assert "WORKFLOW_REPO_PAT" not in env
     assert env["AGE_IDENTITY"] == "AGE-SECRET-KEY-1EXAMPLE"
     assert env["LLM_API_KEY"] == "sk-model-key"
     assert env["PG_PASSWORD"] == "postgres-secret"
@@ -135,10 +149,11 @@ def test_build_bootstrap_env_local_compose_sets_host_bind_mount_vars():
     )
     assert env["WORKFLOW_REPO_SOURCE"] == "local"
     assert env["WORKFLOW_REPO_URL"] == "https://github.com/acme/corp-workflows.git"
-    assert env["WORKFLOW_REPO_PAT"] == "github-pr-token"
+    assert "WORKFLOW_REPO_PAT" not in env
     assert env["HOST_WORKFLOW_REPO_PATH"] == "/home/op/corp-workflows"
     assert env["HOST_PLATFORM_CONFIG_FILE"] == "/home/op/corp-workflows/platform-config.yaml"
     assert env["WORKFLOW_COMPOSE_ENV_FILE"] == "/home/op/corp-workflows/deploy/compose.env"
+    assert env["WORKFLOW_COMPOSE_OVERRIDE_FILE"] == "/home/op/corp-workflows/deploy/docker-compose.override.yml"
     assert "WORKFLOW_REPO_PATHS" not in env
 
 
@@ -146,6 +161,38 @@ def test_build_bootstrap_env_local_kubernetes_sets_workflow_repo_paths():
     env = build_bootstrap_env(_local_config(target="kubernetes"))
     assert env["WORKFLOW_REPO_PATHS"] == "/home/op/corp-workflows"
     assert "HOST_WORKFLOW_REPO_PATH" not in env
+
+
+def test_deployments_do_not_expose_bootstrap_pat_to_runtime():
+    compose = (REPO_ROOT / "deploy/docker-compose.yml").read_text(encoding="utf-8")
+    assert "WORKFLOW_REPO_PAT:" not in compose
+    assert "WORKFLOW_REPO_PAT" not in render_k8s_secret_script(build_bootstrap_env(_remote_config()))
+
+
+def test_prepare_remote_repo_uses_pat_only_in_clone_environment(monkeypatch, tmp_path: Path):
+    checkout = tmp_path / "workflows"
+    config = _remote_config(local_path=str(checkout))
+    calls = []
+
+    monkeypatch.setattr("scripts.bootstrap.shutil.which", lambda name: "/usr/bin/git")
+
+    def run(command, *, check, env):
+        calls.append((command, env))
+        if command[1] == "clone":
+            (checkout / ".git").mkdir(parents=True)
+
+    monkeypatch.setattr("scripts.bootstrap.subprocess.run", run)
+
+    assert prepare_workflow_repo(config) == checkout
+    clone_command, clone_environment = calls[0]
+    assert clone_command == [
+        "/usr/bin/git",
+        "clone",
+        "https://github.com/acme/workflows.git",
+        str(checkout),
+    ]
+    assert clone_environment["GITHUB_APP_INSTALLATION_TOKEN"] == "ghp_token"
+    assert config.repo_pat not in " ".join(clone_command)
 
 
 # ── Render functions ──────────────────────────────────────────────────
@@ -186,6 +233,7 @@ def test_write_artifact_kubernetes_target_writes_executable_script(tmp_path: Pat
     assert path == tmp_path / "dist" / "bootstrap" / "k8s-secret.sh"
     assert path.exists()
     assert path.stat().st_mode & 0o111  # executable bit set
+    assert "agentic-ops-platform-config" in path.read_text(encoding="utf-8")
 
 
 def test_write_artifact_kubernetes_target_uses_configured_namespace(tmp_path: Path):
@@ -211,8 +259,8 @@ def test_main_writes_compose_artifact(monkeypatch, tmp_path: Path, capsys):
 
 
 def test_main_reports_invalid_prompted_configuration(monkeypatch, capsys):
-    monkeypatch.setattr("scripts.bootstrap.gather_config_interactively", lambda: _remote_config(target="compose"))
+    monkeypatch.setattr("scripts.bootstrap.gather_config_interactively", lambda: _remote_config(local_path=""))
 
     exit_code = main()
     assert exit_code == 1
-    assert "bind-mount a local workflow-repo checkout" in capsys.readouterr().err
+    assert "Local workflow-repo checkout path is required" in capsys.readouterr().err

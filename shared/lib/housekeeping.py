@@ -13,10 +13,20 @@ import httpx
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from shared.lib.background_jobs import record_completed_background_job
 from shared.lib.config import settings
 from shared.lib.memory_catalog import BANK_WORKFLOW_LEARNING, load_workflow_banks
-from shared.lib.models import Approval, BackgroundJobRun, Session, SessionEvent, Task, TaskEvent
-from shared.lib.object_store import BUCKET_AGENT_MEMORY, delete_object, list_objects
+from shared.lib.models import (
+    Approval,
+    BackgroundJobRun,
+    KnowledgeSource,
+    KnowledgeSourceVersion,
+    Session,
+    SessionEvent,
+    Task,
+    TaskEvent,
+)
+from shared.lib.object_store import BUCKET_AGENT_MEMORY, ObjectStore, delete_object, get_object_store, list_objects
 from shared.lib.task_queue import TERMINAL_STATUSES
 
 logger = logging.getLogger(__name__)
@@ -29,6 +39,8 @@ class HousekeepingReport:
     pruned_agent_memory_versions: int = 0
     pruned_learning_memories: int = 0
     pruned_background_job_runs: int = 0
+    pruned_knowledge_source_versions: int = 0
+    pruned_knowledge_source_runs: int = 0
     warnings: list[str] = field(default_factory=list)
 
 
@@ -277,6 +289,78 @@ async def prune_background_job_runs(
     return len(run_ids)
 
 
+async def prune_knowledge_source_history(
+    session: AsyncSession,
+    *,
+    keep_latest: int = 5,
+    object_store: ObjectStore | None = None,
+) -> tuple[int, int, list[str]]:
+    """Keep recent source history while preserving active and promoted indexes."""
+    keep = max(0, int(keep_latest))
+    sources = list((await session.execute(select(KnowledgeSource))).scalars())
+    version_ids: list[uuid.UUID] = []
+    run_ids: list[uuid.UUID] = []
+    warnings: list[str] = []
+    store = object_store
+    bucket = settings.knowledge_source_object_store_bucket.strip()
+
+    for source in sources:
+        versions = list(
+            (
+                await session.execute(
+                    select(KnowledgeSourceVersion)
+                    .where(KnowledgeSourceVersion.source_id == source.id)
+                    .order_by(KnowledgeSourceVersion.created_at.desc(), KnowledgeSourceVersion.id.desc())
+                )
+            ).scalars()
+        )
+        retained_version_ids = {version.id for version in versions[:keep]}
+        if source.current_successful_version_id:
+            retained_version_ids.add(source.current_successful_version_id)
+
+        for version in versions:
+            if version.id in retained_version_ids or version.status in {"pending", "running"}:
+                continue
+            artifact_keys = [key for key in (version.artifact_keys or {}).values() if isinstance(key, str) and key]
+            if artifact_keys:
+                if not bucket:
+                    warnings.append(f"Cannot prune Knowledge Source {source.id} version {version.id}: bucket is unset")
+                    continue
+                try:
+                    store = store or get_object_store()
+                    for key in artifact_keys:
+                        await asyncio.to_thread(store.delete_object, bucket, key)
+                except Exception as exc:
+                    warnings.append(f"Cannot prune Knowledge Source {source.id} version {version.id}: {exc}")
+                    continue
+            version_ids.append(version.id)
+
+        runs = list(
+            (
+                await session.execute(
+                    select(BackgroundJobRun)
+                    .where(
+                        BackgroundJobRun.job_type == "knowledge_source_sync",
+                        BackgroundJobRun.knowledge_source_id == source.id,
+                    )
+                    .order_by(BackgroundJobRun.started_at.desc(), BackgroundJobRun.id.desc())
+                )
+            ).scalars()
+        )
+        retained_run_ids = {run.id for run in runs[:keep]}
+        run_ids.extend(
+            run.id for run in runs if run.id not in retained_run_ids and run.status not in {"queued", "running"}
+        )
+
+    if run_ids:
+        await session.execute(delete(BackgroundJobRun).where(BackgroundJobRun.id.in_(run_ids)))
+    if version_ids:
+        await session.execute(delete(KnowledgeSourceVersion).where(KnowledgeSourceVersion.id.in_(version_ids)))
+    if run_ids or version_ids:
+        await session.commit()
+    return len(version_ids), len(run_ids), warnings
+
+
 def prune_agent_memory_versions(
     *,
     versions_to_keep: int | None = None,
@@ -327,6 +411,12 @@ async def run_housekeeping_once(session: AsyncSession | None = None) -> Housekee
     pruned, warnings = await prune_learning_bank_memories()
     report.pruned_learning_memories = pruned
     report.warnings.extend(warnings)
+    (
+        report.pruned_knowledge_source_versions,
+        report.pruned_knowledge_source_runs,
+        warnings,
+    ) = await prune_knowledge_source_history(session)
+    report.warnings.extend(warnings)
     if settings.background_job_run_history_limit > 0:
         report.pruned_background_job_runs = await prune_background_job_runs(
             session,
@@ -348,21 +438,17 @@ async def record_background_job_run(
     warnings: list[str] | None = None,
     error: str | None = None,
 ) -> BackgroundJobRun:
-    run = BackgroundJobRun(
+    return await record_completed_background_job(
+        session,
         job_type=job_type,
         scope=scope,
         status=status,
         started_at=started_at,
         finished_at=finished_at,
-        duration_sec=max(0.0, (finished_at - started_at).total_seconds()),
         summary=summary or {},
         warnings=warnings or [],
         error=error,
     )
-    session.add(run)
-    await session.commit()
-    await session.refresh(run)
-    return run
 
 
 async def archive_task_and_related(session: AsyncSession, task_id: uuid.UUID, *, archived: bool) -> None:

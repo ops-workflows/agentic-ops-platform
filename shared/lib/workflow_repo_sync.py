@@ -108,7 +108,7 @@ def _platform_config_source_path() -> Path:
     """Return the repo-owned platform config selected by the current sync mode."""
     if settings.workflow_repo_url.strip() and settings.workflow_repo_source.strip().lower() != "local":
         return Path(settings.workflow_repo_local_path).expanduser() / "platform-config.yaml"
-    return Path(settings.platform_config_file or settings.platform_secrets_file).expanduser()
+    return Path(settings.platform_config_file).expanduser()
 
 
 def _platform_root() -> Path:

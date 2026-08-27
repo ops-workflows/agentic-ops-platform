@@ -17,6 +17,8 @@ from pathlib import Path
 import yaml
 
 from shared.lib.config import settings
+from shared.lib.github_app import github_git_auth_environment, github_installation_token
+from shared.lib.platform_secrets import load_workflow_repo_github_connection
 
 logger = logging.getLogger(__name__)
 
@@ -32,21 +34,6 @@ class WorkflowPackage:
 
 def _split_path_list(value: str) -> list[Path]:
     return [Path(part).expanduser() for part in value.split(os.pathsep) if part.strip()]
-
-
-def _authenticated_repo_url(url: str, pat: str) -> str:
-    """Inject a PAT into an https workflow-repo URL for authenticated clone/fetch.
-
-    Only https URLs are rewritten (SSH URLs authenticate via SSH keys instead).
-    Uses the token-as-username convention (`https://<token>@host/...`), which
-    GitHub and most git hosts accept for PAT-based HTTPS auth.
-    """
-    if not pat or not url.startswith("https://"):
-        return url
-    if "@" in url[len("https://") :].split("/", 1)[0]:
-        # URL already carries credentials; do not overwrite them.
-        return url
-    return f"https://{pat}@{url[len('https://') :]}"
 
 
 def _sync_configured_workflow_repo(*, ref_override: str | None = None, raise_on_error: bool = False) -> Path | None:
@@ -68,40 +55,53 @@ def _sync_configured_workflow_repo(*, ref_override: str | None = None, raise_on_
         return None
 
     ref = (ref_override if ref_override is not None else settings.workflow_repo_ref).strip()
-    authenticated_url = _authenticated_repo_url(repo_url, settings.workflow_repo_pat.strip())
+    platform_config_file = settings.platform_config_file
+    connection_name = load_workflow_repo_github_connection(platform_config_file)
+    token = (
+        github_installation_token(
+            connection_name,
+            platform_config_file=platform_config_file,
+            age_identity=settings.age_identity or None,
+        )
+        if connection_name
+        else ""
+    )
     local_path = Path(settings.workflow_repo_local_path).expanduser()
     try:
-        if not local_path.exists():
-            local_path.parent.mkdir(parents=True, exist_ok=True)
-            subprocess.run(  # noqa: S603 - operator-configured workflow repo sync command.
-                [git_binary, "clone", authenticated_url, str(local_path)],
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        else:
-            # Re-apply the (possibly rotated) authenticated URL before fetching so a
-            # PAT added or rotated after the initial clone is picked up on next sync.
-            subprocess.run(  # noqa: S603 - operator-configured workflow repo sync command.
-                [git_binary, "-C", str(local_path), "remote", "set-url", "origin", authenticated_url],
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            subprocess.run(  # noqa: S603 - operator-configured workflow repo sync command.
-                [git_binary, "-C", str(local_path), "fetch", "--all", "--prune"],
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+        with github_git_auth_environment(token) as git_environment:
+            if not local_path.exists():
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                subprocess.run(  # noqa: S603 - operator-configured workflow repo sync command.
+                    [git_binary, "clone", repo_url, str(local_path)],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env=dict(git_environment),
+                )
+            else:
+                subprocess.run(  # noqa: S603 - operator-configured workflow repo sync command.
+                    [git_binary, "-C", str(local_path), "remote", "set-url", "origin", repo_url],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env=dict(git_environment),
+                )
+                subprocess.run(  # noqa: S603 - operator-configured workflow repo sync command.
+                    [git_binary, "-C", str(local_path), "fetch", "--all", "--prune"],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env=dict(git_environment),
+                )
 
-        if ref:
-            subprocess.run(  # noqa: S603 - operator-configured workflow repo sync command.
-                [git_binary, "-C", str(local_path), "checkout", ref],
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            if ref:
+                subprocess.run(  # noqa: S603 - operator-configured workflow repo sync command.
+                    [git_binary, "-C", str(local_path), "checkout", ref],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env=dict(git_environment),
+                )
         return local_path
     except (OSError, subprocess.CalledProcessError) as exc:
         if raise_on_error:

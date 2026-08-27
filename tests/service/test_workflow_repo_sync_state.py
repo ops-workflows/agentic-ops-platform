@@ -69,6 +69,7 @@ async def test_sync_workflow_repo_records_error_without_raising(db_session, monk
     from shared.lib import workflow_repo_sync as sync_mod
 
     monkeypatch.setattr(settings, "workflow_repo_url", "https://github.com/acme/workflows.git")
+    monkeypatch.setattr(settings, "workflow_repo_source", "remote")
 
     def _raise_sync(_ref):
         raise RuntimeError("simulated git failure")

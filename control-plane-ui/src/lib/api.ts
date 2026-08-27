@@ -229,8 +229,12 @@ export interface BackgroundJobRun {
   id: string;
   job_type: string;
   scope: string | null;
+  trigger: string | null;
+  knowledge_source_id: string | null;
+  knowledge_source_version_id: string | null;
   status: string;
   started_at: string;
+  heartbeat_at: string | null;
   finished_at: string | null;
   duration_sec: number | null;
   summary: Record<string, unknown>;
@@ -243,6 +247,44 @@ export interface PlatformBackgroundJobs {
   total: number;
   limit: number;
   offset: number;
+}
+
+export interface KnowledgeSource {
+  id: string;
+  canonical_alias: string;
+  repository_url: string;
+  default_ref: string;
+  include_paths: string[];
+  exclude_paths: string[];
+  credential_ref: string | null;
+  sync_policy: Record<string, unknown>;
+  enabled: boolean;
+  current_successful_version_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GitHubConnection {
+  name: string;
+  web_base_url: string;
+}
+
+export interface KnowledgeSourceVersion {
+  id: string;
+  commit_sha: string;
+  status: string;
+  graphify_version: string;
+  extraction_config_hash: string;
+  artifact_keys: Record<string, unknown>;
+  artifact_checksums: Record<string, unknown>;
+  file_count: number;
+  node_count: number;
+  edge_count: number;
+  warnings: unknown[];
+  error: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
 }
 
 export interface HindsightMemoryEntry {

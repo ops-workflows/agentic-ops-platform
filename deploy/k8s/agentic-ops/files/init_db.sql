@@ -147,21 +147,78 @@ CREATE TABLE control_plane.schedules (
 CREATE INDEX idx_schedules_agent ON control_plane.schedules (agent_id);
 CREATE INDEX idx_schedules_enabled ON control_plane.schedules (enabled) WHERE enabled = TRUE;
 
+CREATE TABLE control_plane.knowledge_sources (
+    id                            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    canonical_alias               TEXT NOT NULL UNIQUE,
+    repository_url                TEXT NOT NULL,
+    default_ref                   TEXT NOT NULL,
+    include_paths                 JSONB NOT NULL DEFAULT '[]',
+    exclude_paths                 JSONB NOT NULL DEFAULT '[]',
+    credential_ref                TEXT,
+    sync_policy                   JSONB NOT NULL DEFAULT '{}',
+    enabled                       BOOLEAN NOT NULL DEFAULT TRUE,
+    current_successful_version_id UUID,
+    created_at                    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at                    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_knowledge_sources_enabled ON control_plane.knowledge_sources (enabled);
+
+CREATE TABLE control_plane.knowledge_source_versions (
+    id                     UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    source_id              UUID NOT NULL REFERENCES control_plane.knowledge_sources(id) ON DELETE CASCADE,
+    commit_sha             TEXT NOT NULL,
+    status                 TEXT NOT NULL DEFAULT 'pending',
+    graphify_version       TEXT NOT NULL,
+    extraction_config_hash TEXT NOT NULL,
+    artifact_keys          JSONB NOT NULL DEFAULT '{}',
+    artifact_checksums     JSONB NOT NULL DEFAULT '{}',
+    file_count             INT NOT NULL DEFAULT 0,
+    node_count             INT NOT NULL DEFAULT 0,
+    edge_count             INT NOT NULL DEFAULT 0,
+    warnings               JSONB NOT NULL DEFAULT '[]',
+    error                  TEXT,
+    started_at             TIMESTAMPTZ,
+    finished_at            TIMESTAMPTZ,
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_knowledge_source_versions_identity
+        UNIQUE (source_id, commit_sha, graphify_version, extraction_config_hash)
+);
+
+ALTER TABLE control_plane.knowledge_sources
+    ADD CONSTRAINT fk_knowledge_sources_current_version
+    FOREIGN KEY (current_successful_version_id)
+    REFERENCES control_plane.knowledge_source_versions(id)
+    ON DELETE SET NULL;
+
+CREATE INDEX idx_knowledge_source_versions_source
+    ON control_plane.knowledge_source_versions (source_id, created_at DESC);
+CREATE INDEX idx_knowledge_source_versions_status
+    ON control_plane.knowledge_source_versions (status, created_at DESC);
+
 CREATE TABLE control_plane.background_job_runs (
-    id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    job_type     TEXT NOT NULL,
-    scope        TEXT,
-    status       TEXT NOT NULL DEFAULT 'running',
-    started_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    finished_at  TIMESTAMPTZ,
-    duration_sec FLOAT,
-    summary      JSONB NOT NULL DEFAULT '{}',
-    warnings     JSONB NOT NULL DEFAULT '[]',
-    error        TEXT
+    id                          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    job_type                    TEXT NOT NULL,
+    scope                       TEXT,
+    trigger                     TEXT,
+    knowledge_source_id         UUID REFERENCES control_plane.knowledge_sources(id) ON DELETE SET NULL,
+    knowledge_source_version_id UUID REFERENCES control_plane.knowledge_source_versions(id) ON DELETE SET NULL,
+    status                      TEXT NOT NULL DEFAULT 'running',
+    started_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    heartbeat_at                TIMESTAMPTZ,
+    finished_at                 TIMESTAMPTZ,
+    duration_sec                FLOAT,
+    summary                     JSONB NOT NULL DEFAULT '{}',
+    warnings                    JSONB NOT NULL DEFAULT '[]',
+    error                       TEXT
 );
 
 CREATE INDEX idx_background_job_runs_job_type ON control_plane.background_job_runs (job_type, started_at DESC);
 CREATE INDEX idx_background_job_runs_started_at ON control_plane.background_job_runs (started_at DESC);
+CREATE INDEX idx_background_job_runs_source
+    ON control_plane.background_job_runs (knowledge_source_id, started_at DESC);
+CREATE INDEX idx_background_job_runs_version
+    ON control_plane.background_job_runs (knowledge_source_version_id);
 
 -- Singleton row (id=1) tracking the connected workflow repo's pinned
 -- version and last sync outcome. Bootstrap-owned repo URL/PAT are never

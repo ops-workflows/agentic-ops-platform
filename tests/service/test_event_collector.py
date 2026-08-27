@@ -104,8 +104,23 @@ async def test_approval_requested_creates_pending_approval(db_session) -> None:
 
 
 @pytest.mark.asyncio
-async def test_waiting_task_frees_running_slot(db_session) -> None:
-    waiting_task = await create_task(db_session, workflow="platform-test", prompt="needs approval")
+@pytest.mark.parametrize(
+    ("event_type", "event_data", "expected_status"),
+    [
+        (
+            "approval_requested",
+            {"tool_name": "Bash", "tool_input_preview": "echo approval-needed hi"},
+            "waiting_approval",
+        ),
+        (
+            "user_question_requested",
+            {"questions": [{"question": "Proceed?"}]},
+            "waiting_user_input",
+        ),
+    ],
+)
+async def test_waiting_task_frees_running_slot(db_session, event_type, event_data, expected_status) -> None:
+    waiting_task = await create_task(db_session, workflow="platform-test", prompt="needs human input")
     queued_task = await create_task(db_session, workflow="platform-test", prompt="can run next")
 
     dequeued = await dequeue_task(db_session, workflow="platform-test", max_running=1)
@@ -115,18 +130,15 @@ async def test_waiting_task_frees_running_slot(db_session) -> None:
     await receive_event(
         EventPayload(
             task_id=str(waiting_task.id),
-            event_type="approval_requested",
+            event_type=event_type,
             timestamp=_ts(),
-            data={
-                "tool_name": "Bash",
-                "tool_input_preview": "echo approval-needed hi",
-            },
+            data=event_data,
         )
     )
 
     refreshed = await db_session.get(Task, waiting_task.id)
     await db_session.refresh(refreshed)
-    assert refreshed.status == "waiting_approval"
+    assert refreshed.status == expected_status
 
     next_task = await dequeue_task(db_session, workflow="platform-test", max_running=1)
     assert next_task is not None

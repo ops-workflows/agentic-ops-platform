@@ -61,7 +61,6 @@ class Settings(
     gateway_public_base_url: str = ""
     control_plane_ui_url: str = ""
     platform_config_file: str = "/app/platform-config.yaml"
-    platform_secrets_file: str = ""
 
     # ── Workflow repository loading ──────────────────────────────
     # workflow_repo_paths can contain multiple mounted workflow roots separated
@@ -71,11 +70,6 @@ class Settings(
     workflow_repo_source: str = ""
     workflow_repo_url: str = ""
     workflow_repo_ref: str = ""
-    # Bootstrap-only credential to authenticate the clone/fetch of
-    # workflow_repo_url. Never read from repo-owned platform-config.yaml
-    # (that would be circular); comes only from the operator's generated
-    # bootstrap env/secret (see `make bootstrap`).
-    workflow_repo_pat: str = ""
     workflow_repo_local_path: str = "/workspace/workflows"
     # Operator-provided host path for UI display only; runtime code uses the
     # container-local workflow_repo_local_path above.
@@ -92,6 +86,15 @@ class Settings(
     # URL, instead of (or in addition to) a static runtime_bundle_uri_template.
     runtime_bundle_object_store_bucket: str = ""
     runtime_bundle_presigned_url_expires_sec: int = 3600
+    knowledge_source_object_store_bucket: str = ""
+    knowledge_source_indexer_cache_root: str = "/var/lib/agentic-ops/knowledge-indexer"
+    knowledge_source_graphify_binary: str = "graphify"
+    knowledge_source_graphify_timeout_sec: int = 1800
+    knowledge_source_stale_run_sec: int = 3600
+    knowledge_source_indexer_poll_interval_sec: int = 30
+    knowledge_source_serving_cache_root: str = "/var/lib/agentic-ops/knowledge"
+    knowledge_source_refresh_interval_sec: int = 30
+    knowledge_source_cache_versions_to_keep: int = 2
     kubernetes_memory_helper_image: str = ""
     kubernetes_bootstrap_secret: str = ""
     housekeeping_enabled: bool = True
@@ -140,7 +143,7 @@ def _apply_platform_overrides(target: Settings, loaded: dict[str, str]) -> None:
 
 def _apply_platform_secret_defaults() -> None:
     """Overlay repo-stored platform config onto settings unless env explicitly set it."""
-    platform_file = settings.platform_config_file or settings.platform_secrets_file
+    platform_file = settings.platform_config_file
     if not platform_file:
         return
 

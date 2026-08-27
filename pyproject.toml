@@ -12,6 +12,7 @@ dependencies = [
     "psycopg[binary]>=3.2.0",
     "sqlalchemy[asyncio]>=2.0.30",
     "asyncpg>=0.29.0",
+    "boto3>=1.35.0",
     "minio>=7.2.0",
     "apscheduler>=3.10.0",
     "docker>=7.1.0",
@@ -22,6 +23,7 @@ dependencies = [
     "fastmcp>=3.0.0",
     "python-multipart>=0.0.9",
     "pyrage>=1.1.0",
+    "PyJWT[crypto]>=2.9.0",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +40,10 @@ connectors = [
 ]
 kubernetes = [
     "kubernetes>=30.0.0",
+]
+knowledge-indexer = [
+    "graphifyy==0.9.40",
+    "zstandard==0.25.0",
 ]
 
 [build-system]
@@ -75,8 +81,9 @@ ignore = ["S101", "S104", "B008"]
 # Salesforce MCP builds server-capped, field-validated SOQL (never raw user SQL) and
 # carries long tool-guidance docstrings; the query construction is the intended design.
 "mcps/integrations/mcp_salesforce.py" = ["E501", "S608"]
-# session-manager/ uses a hyphenated directory name by repo/deployment convention; it isn't
-# imported as a dotted package, so the N999 module-name check doesn't apply here.
+# These service directories use hyphenated deployment names and are not imported
+# as dotted packages, so the N999 module-name check does not apply to them.
+"knowledge-indexer/__init__.py" = ["N999"]
 "session-manager/__init__.py" = ["N999"]
 
 [tool.pytest.ini_options]

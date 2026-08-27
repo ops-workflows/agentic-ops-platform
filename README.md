@@ -93,13 +93,12 @@ python -m ruff format --check .         # format check
 cd control-plane-ui && npm ci && npm run build   # control-plane UI
 ```
 
-`make test` runs the full unit + service (real Postgres) + runtime (real
+`make tests` runs the full unit + service (real Postgres) + runtime (real
 Docker) suite; see the Makefile (`make help`) for every target.
 
 ## Roadmap and contributing
 
-See [docs/roadmap/](docs/roadmap/) for planned work and
-[CONTRIBUTING.md](CONTRIBUTING.md) for how to contribute.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to contribute.
 
 ## License
 

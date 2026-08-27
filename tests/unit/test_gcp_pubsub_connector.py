@@ -86,6 +86,74 @@ def test_subscriber_callback_uses_connector_event_loop(monkeypatch):
     assert message.nacked is False
 
 
+def test_gcs_payload_filter_acks_unmatched_object_without_creating_task(monkeypatch):
+    class FakeMessage:
+        data = b'{"bucket": "alerts", "name": "unrelated/file.eml"}'
+        attributes = {}
+        message_id = "message-2"
+        acked = False
+        nacked = False
+
+        def ack(self):
+            self.acked = True
+
+        def nack(self):
+            self.nacked = True
+
+    monkeypatch.setattr(
+        main.asyncio,
+        "run_coroutine_threadsafe",
+        lambda *args: pytest.fail("filtered message must not create a task"),
+    )
+    message = FakeMessage()
+    config = {
+        "source": {
+            "gcs_payload": {
+                "enabled": True,
+                "object_prefixes": ["salesforce-alerts/"],
+                "allow_non_gcs": True,
+            }
+        }
+    }
+
+    main._subscriber_callback(object(), config)(message)
+
+    assert message.acked is True
+    assert message.nacked is False
+
+
+def test_gcs_payload_filter_can_allow_non_gcs_messages():
+    config = {
+        "source": {
+            "gcs_payload": {
+                "enabled": True,
+                "allowed_buckets": ["alerts"],
+                "object_prefixes": ["salesforce-alerts/"],
+                "allow_non_gcs": True,
+            }
+        }
+    }
+
+    assert main._gcs_payload_allowed({"event": "generic"}, config) is True
+    assert main._gcs_payload_allowed({"bucket": "alerts", "name": "salesforce-alerts/a.eml"}, config) is True
+    assert main._gcs_payload_allowed({"bucket": "other", "name": "salesforce-alerts/a.eml"}, config) is False
+
+
+@pytest.mark.asyncio
+async def test_wait_for_subscriber_propagates_stream_failure(monkeypatch):
+    class FailedFuture:
+        def done(self):
+            return True
+
+        def result(self):
+            raise RuntimeError("stream failed")
+
+    monkeypatch.setattr(main, "_shutdown", False)
+
+    with pytest.raises(RuntimeError, match="stream failed"):
+        await main._wait_for_subscriber(FailedFuture())
+
+
 def test_parse_gcs_email_prefers_plain_text_and_extracts_headers():
     raw = b"""From: Salesforce <info@salesforce.com>
 To: alerts@example.com

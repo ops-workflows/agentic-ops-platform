@@ -5,22 +5,49 @@ from __future__ import annotations
 import pytest
 
 from mcps.core import mcp_platform
+from shared.lib.github_app import GitHubAppError
+from shared.lib.platform_secrets import GitHubAppConnection
 
 pytestmark = pytest.mark.unit
 
 
 @pytest.mark.parametrize(
-    ("workflow_repo_url", "expected"),
+    ("workflow_repo_url", "connection", "expected"),
     [
-        ("https://github.com/acme/corp-workflows.git", "acme/corp-workflows"),
-        ("https://github.com/acme/corp-workflows", "acme/corp-workflows"),
-        ("git@github.com:acme/corp-workflows.git", "acme/corp-workflows"),
-        ("https://git.example.internal/acme/corp-workflows.git", ""),
+        (
+            "https://github.com/acme/corp-workflows.git",
+            GitHubAppConnection("public", "https://github.com", "https://api.github.com", "1", "2", "key"),
+            ("https://api.github.com", "acme", "corp-workflows", "installation-token"),
+        ),
+        (
+            "https://github.company.example/acme/corp-workflows",
+            GitHubAppConnection(
+                "enterprise",
+                "https://github.company.example",
+                "https://github.company.example/api/v3",
+                "3",
+                "4",
+                "key",
+            ),
+            ("https://github.company.example/api/v3", "acme", "corp-workflows", "installation-token"),
+        ),
     ],
 )
-def test_workflow_github_repo_is_derived_only_from_bootstrap_url(monkeypatch, workflow_repo_url, expected):
+def test_workflow_github_context_uses_selected_connection(monkeypatch, workflow_repo_url, connection, expected):
     monkeypatch.setattr(mcp_platform, "WORKFLOW_REPO_URL", workflow_repo_url)
-    assert mcp_platform._workflow_github_repo() == expected
+    monkeypatch.setattr(mcp_platform, "load_workflow_repo_github_connection", lambda path: connection.name)
+    monkeypatch.setattr(mcp_platform, "github_app_connection", lambda *args, **kwargs: connection)
+    monkeypatch.setattr(mcp_platform, "github_installation_token", lambda *args, **kwargs: "installation-token")
+    assert mcp_platform._workflow_github_context() == expected
+
+
+def test_workflow_github_context_rejects_repo_on_other_host(monkeypatch):
+    connection = GitHubAppConnection("public", "https://github.com", "https://api.github.com", "1", "2", "key")
+    monkeypatch.setattr(mcp_platform, "WORKFLOW_REPO_URL", "https://other.example/acme/workflows.git")
+    monkeypatch.setattr(mcp_platform, "load_workflow_repo_github_connection", lambda path: connection.name)
+    monkeypatch.setattr(mcp_platform, "github_app_connection", lambda *args, **kwargs: connection)
+    with pytest.raises(GitHubAppError, match="does not belong"):
+        mcp_platform._workflow_github_context()
 
 
 @pytest.mark.parametrize(

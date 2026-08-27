@@ -64,6 +64,31 @@ class FakeMattermost:
             ids = self.state.thread_order.get(thread_id, [])
             return [self.state.posts[pid] for pid in ids]
 
+    def seed_post(
+        self,
+        *,
+        post_id: str,
+        channel_id: str,
+        message: str,
+        root_id: str = "",
+        user_id: str = "operator-user",
+        username: str = "operator",
+    ) -> _Post:
+        post = _Post(
+            id=post_id,
+            channel_id=channel_id,
+            root_id=root_id,
+            user_id=user_id,
+            username=username,
+            message=message,
+            create_at=int(time.time() * 1000),
+        )
+        with self.state.lock:
+            self.state.posts[post_id] = post
+            self.state.posts_by_channel[channel_id].append(post_id)
+            self.state.thread_order[root_id or post_id].append(post_id)
+        return post
+
     def reset(self) -> None:
         with self.state.lock:
             self.state = FakeMattermostState()
@@ -130,6 +155,14 @@ class FakeMattermost:
         def me():
             return {"id": "bot-user", "username": "ops-bot"}
 
+        @app.get("/api/v4/posts/{root_id}/thread")
+        def mattermost_thread(root_id: str):
+            with self.state.lock:
+                post_ids = list(self.state.thread_order.get(root_id, []))
+                posts = {post_id: self.state.posts[post_id].model_dump() for post_id in post_ids}
+                self.state.received_requests.append({"op": "mattermost_thread", "root_id": root_id})
+            return {"order": post_ids, "posts": posts}
+
         @app.post("/chat.postMessage")
         def slack_create_post(body: dict):
             channel_id = str(body.get("channel") or "")
@@ -170,6 +203,26 @@ class FakeMattermost:
         @app.post("/auth.test")
         def slack_auth_test():
             return {"ok": True, "user_id": "slack-bot-user"}
+
+        @app.post("/conversations.replies")
+        def slack_thread(body: dict):
+            thread_id = str(body.get("ts") or "")
+            channel_id = str(body.get("channel") or "")
+            with self.state.lock:
+                post_ids = list(self.state.thread_order.get(thread_id, []))
+                posts = [self.state.posts[post_id] for post_id in post_ids]
+                self.state.received_requests.append({"op": "slack_thread", "body": body})
+            messages = [
+                {
+                    "ts": post.id,
+                    "user": post.user_id,
+                    "username": post.username,
+                    "text": post.message,
+                }
+                for post in posts
+                if post.channel_id == channel_id
+            ]
+            return {"ok": True, "messages": messages, "response_metadata": {"next_cursor": ""}}
 
         @app.get("/conversations.list")
         def slack_list_channels():

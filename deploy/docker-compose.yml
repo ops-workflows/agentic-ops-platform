@@ -60,11 +60,13 @@ services:
         mc alias set local http://minio:9000 $${OBJECT_STORE_ACCESS_KEY} $${OBJECT_STORE_SECRET_KEY};
         mc mb --ignore-existing local/agent-memory;
         mc mb --ignore-existing local/agentic-ops-bundles;
+        mc mb --ignore-existing local/$${KNOWLEDGE_SOURCE_OBJECT_STORE_BUCKET};
         exit 0;
       "
     environment:
       OBJECT_STORE_ACCESS_KEY: ${OBJECT_STORE_ACCESS_KEY:-agentic_ops}
       OBJECT_STORE_SECRET_KEY: ${OBJECT_STORE_SECRET_KEY:-localdev-minio-password}
+      KNOWLEDGE_SOURCE_OBJECT_STORE_BUCKET: ${KNOWLEDGE_SOURCE_OBJECT_STORE_BUCKET:-agentic-ops-knowledge-sources}
     networks:
       - ai-ops-network
 
@@ -174,6 +176,9 @@ services:
       DOCKER_HOST: unix:///var/run/docker.sock
       DOCKER_NETWORK: ${DOCKER_NETWORK:-ai-ops-network}
       GATEWAY_EVENT_URL: http://gateway:8080/events
+      OBJECT_STORE_ENDPOINT: minio:9000
+      OBJECT_STORE_ACCESS_KEY: ${OBJECT_STORE_ACCESS_KEY:-agentic_ops}
+      KNOWLEDGE_SOURCE_OBJECT_STORE_BUCKET: ${KNOWLEDGE_SOURCE_OBJECT_STORE_BUCKET:-agentic-ops-knowledge-sources}
       SANDBOX_MODE: ${SANDBOX_MODE:-}
     volumes:
       - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
@@ -181,6 +186,33 @@ services:
       - ${RUNTIME_BUNDLE_ROOT:-/tmp/agentic-ops-runtime-bundles}:${RUNTIME_BUNDLE_ROOT:-/tmp/agentic-ops-runtime-bundles}
       - ../shared:/app/shared:ro
       - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    networks:
+      - ai-ops-network
+
+  knowledge-indexer:
+    build:
+      context: ..
+      dockerfile: knowledge-indexer/Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *platform-bootstrap-env
+      PLATFORM_CONFIG_FILE: /app/platform-config.yaml
+      WORKFLOW_ROOT: /app/workflows
+      WORKFLOW_REPO_PATHS: ${WORKFLOW_REPO_PATHS:-/app/workflows}
+      OBJECT_STORE_ENDPOINT: minio:9000
+      OBJECT_STORE_ACCESS_KEY: ${OBJECT_STORE_ACCESS_KEY:-agentic_ops}
+      KNOWLEDGE_SOURCE_OBJECT_STORE_BUCKET: ${KNOWLEDGE_SOURCE_OBJECT_STORE_BUCKET:-agentic-ops-knowledge-sources}
+      KNOWLEDGE_SOURCE_INDEXER_CACHE_ROOT: /var/lib/agentic-ops/knowledge-indexer
+      KNOWLEDGE_SOURCE_INDEXER_POLL_INTERVAL_SEC: ${KNOWLEDGE_SOURCE_INDEXER_POLL_INTERVAL_SEC:-30}
+      KNOWLEDGE_SOURCE_STALE_RUN_SEC: ${KNOWLEDGE_SOURCE_STALE_RUN_SEC:-3600}
+    volumes:
+      - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
+      - knowledge-indexer-cache:/var/lib/agentic-ops/knowledge-indexer
     depends_on:
       postgres:
         condition: service_healthy
@@ -237,6 +269,35 @@ services:
       - hindsight
     ports:
       - "8103:8103"
+    networks:
+      - ai-ops-network
+
+  mcp-knowledge:
+    build:
+      context: ..
+      dockerfile: mcps/Dockerfile
+    command: ["python", "-m", "uvicorn", "mcps.core.mcp_knowledge:app", "--host", "0.0.0.0", "--port", "8108"]
+    restart: unless-stopped
+    environment:
+      <<: *platform-bootstrap-env
+      PLATFORM_CONFIG_FILE: /app/platform-config.yaml
+      OBJECT_STORE_ENDPOINT: minio:9000
+      OBJECT_STORE_ACCESS_KEY: ${OBJECT_STORE_ACCESS_KEY:-agentic_ops}
+      KNOWLEDGE_SOURCE_OBJECT_STORE_BUCKET: ${KNOWLEDGE_SOURCE_OBJECT_STORE_BUCKET:-agentic-ops-knowledge-sources}
+      KNOWLEDGE_SOURCE_SERVING_CACHE_ROOT: /var/lib/agentic-ops/knowledge
+      KNOWLEDGE_SOURCE_REFRESH_INTERVAL_SEC: ${KNOWLEDGE_SOURCE_REFRESH_INTERVAL_SEC:-30}
+      KNOWLEDGE_SOURCE_CACHE_VERSIONS_TO_KEEP: ${KNOWLEDGE_SOURCE_CACHE_VERSIONS_TO_KEEP:-2}
+    volumes:
+      - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
+      - ${HOST_WORKFLOW_REPO_PATH:-../examples/workflow-repo/workflows}:/app/workflows:ro
+      - knowledge-serving-cache:/var/lib/agentic-ops/knowledge
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    ports:
+      - "8108:8108"
     networks:
       - ai-ops-network
 
@@ -329,6 +390,23 @@ services:
     networks:
       - ai-ops-network
 
+  mcp-github:
+    build:
+      context: ..
+      dockerfile: mcps/Dockerfile
+    command: ["python", "-m", "uvicorn", "mcps.integrations.mcp_github:app", "--host", "0.0.0.0", "--port", "8107"]
+    profiles: ["github", "incident", "mcps"]
+    restart: unless-stopped
+    environment:
+      <<: *platform-bootstrap-env
+      PLATFORM_CONFIG_FILE: /app/platform-config.yaml
+    volumes:
+      - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
+    ports:
+      - "8107:8107"
+    networks:
+      - ai-ops-network
+
   # ─── Source Connectors ─────────────────────────────────────────────
 
   servicenow-connector:
@@ -341,8 +419,10 @@ services:
       <<: *platform-bootstrap-env
       PLATFORM_CONFIG_FILE: /app/platform-config.yaml
       CONNECTOR_INSTANCE_ID: ${SERVICENOW_CONNECTOR_INSTANCE_ID:-}
+      WORKFLOW_REPO_PATHS: ${WORKFLOW_REPO_PATHS:-/app/workflows}
     volumes:
       - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
+      - ${HOST_WORKFLOW_REPO_PATH:-../examples/workflow-repo/workflows}:/app/workflows:ro
       - ../shared:/app/shared:ro
     depends_on:
       postgres:
@@ -372,6 +452,8 @@ volumes:
   pgdata:
   minio-data:
   hindsight-data:
+  knowledge-indexer-cache:
+  knowledge-serving-cache:
   agent-memory-documentation:
   agent-memory-incident-investigator:
 

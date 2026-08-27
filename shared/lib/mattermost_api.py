@@ -9,6 +9,18 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+MAX_NORMALIZED_MESSAGE_CHARS = 32_000
+_ATTACHMENT_TEXT_FIELDS = (
+    "fallback",
+    "pretext",
+    "author_name",
+    "title",
+    "text",
+    "footer",
+    "author_link",
+    "title_link",
+)
+
 
 class MattermostAPIError(Exception):
     """Raised when Mattermost REST interaction fails."""
@@ -22,6 +34,98 @@ def _auth_headers(bot_token: str) -> dict[str, str]:
 
 def _normalize_channel_name(channel_name: str) -> str:
     return channel_name.strip().lstrip("#")
+
+
+def _append_post_text(values: list[str], value: Any, *, label: str = "") -> None:
+    if not isinstance(value, str):
+        return
+    text = value.strip()
+    if not text:
+        return
+    rendered = f"{label}: {text}" if label else text
+    if rendered not in values:
+        values.append(rendered)
+
+
+def normalize_post_text(post: dict[str, Any]) -> tuple[str, bool]:
+    """Return visible Mattermost post and attachment text with a bounded size."""
+    values: list[str] = []
+    _append_post_text(values, post.get("message"))
+
+    props = post.get("props")
+    if isinstance(props, dict):
+        attachments = props.get("attachments")
+        if isinstance(attachments, list):
+            for attachment in attachments:
+                if not isinstance(attachment, dict):
+                    continue
+                for field_name in _ATTACHMENT_TEXT_FIELDS:
+                    _append_post_text(values, attachment.get(field_name))
+                fields = attachment.get("fields")
+                if not isinstance(fields, list):
+                    continue
+                for field in fields:
+                    if not isinstance(field, dict):
+                        continue
+                    title = str(field.get("title") or "").strip()
+                    _append_post_text(values, field.get("value"), label=title)
+
+    text = "\n".join(values)
+    if len(text) <= MAX_NORMALIZED_MESSAGE_CHARS:
+        return text, False
+    return text[:MAX_NORMALIZED_MESSAGE_CHARS].rstrip(), True
+
+
+async def fetch_thread_messages(
+    client: httpx.AsyncClient,
+    *,
+    api_url: str,
+    bot_token: str,
+    root_id: str,
+    current_message_id: str,
+    current_message_created_at_ms: int,
+    limit: int = 10,
+) -> list[dict[str, str]]:
+    """Return the latest visible Mattermost thread posts through the current reply."""
+    response = await client.get(
+        f"{api_url.rstrip('/')}/api/v4/posts/{root_id}/thread",
+        params={
+            "perPage": limit,
+            "fromPost": current_message_id,
+            "fromCreateAt": current_message_created_at_ms,
+            "direction": "up",
+        },
+        headers=_auth_headers(bot_token),
+    )
+    response.raise_for_status()
+    payload = response.json()
+    posts = payload.get("posts") if isinstance(payload, dict) else None
+    if not isinstance(posts, dict):
+        raise MattermostAPIError("Mattermost thread response did not contain posts")
+
+    ordered_posts = sorted(
+        (post for post in posts.values() if isinstance(post, dict)),
+        key=lambda post: (int(post.get("create_at") or 0), str(post.get("id") or "")),
+    )[-limit:]
+    messages: list[dict[str, str]] = []
+    for post in ordered_posts:
+        text, _truncated = normalize_post_text(post)
+        if not text:
+            continue
+        props = post.get("props") if isinstance(post.get("props"), dict) else {}
+        messages.append(
+            {
+                "message_id": str(post.get("id") or ""),
+                "author": str(
+                    props.get("override_username")
+                    or props.get("webhook_display_name")
+                    or post.get("user_id")
+                    or "unknown"
+                ),
+                "text": text,
+            }
+        )
+    return messages
 
 
 async def get_authenticated_user_id(

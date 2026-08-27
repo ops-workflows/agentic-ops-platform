@@ -14,7 +14,6 @@ metadata:
 source:
   type: polling
   interval_sec: 60
-  instance_url: ${SERVICENOW_INSTANCE_URL}
   table: incident
   query: "state=1^priority<=3^sys_created_on>=javascript:gs.minutesAgoStart(5)"
   fields:

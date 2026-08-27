@@ -15,7 +15,6 @@ import asyncio
 import io
 import json
 import logging
-import re
 import tarfile
 import uuid
 from collections import defaultdict
@@ -26,20 +25,31 @@ from typing import Any
 import httpx
 import yaml
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from session_manager.runtime_launchers import get_runtime_launcher
 from sqlalchemy import delete, func, select, text, update
 
 from gateway.approval_broker import get_runtime_approval
 from gateway.plugin_dir import read_plugin_files
 from gateway.scheduler import compute_next_run, register_schedule_job, unregister_schedule_job
+from shared.lib.background_jobs import queue_background_job
 from shared.lib.config import settings
 from shared.lib.db import async_session_factory
 from shared.lib.memory_catalog import BANK_INCIDENT_RCA, BANK_WORKFLOW_LEARNING, load_workflow_banks
 from shared.lib.message_bus import build_message_bus
-from shared.lib.models import Agent, Approval, BackgroundJobRun, Schedule, Session, SessionEvent, Task
+from shared.lib.models import (
+    Agent,
+    Approval,
+    BackgroundJobRun,
+    KnowledgeSource,
+    KnowledgeSourceVersion,
+    Schedule,
+    Session,
+    SessionEvent,
+    Task,
+)
 from shared.lib.object_store import BUCKET_AGENT_MEMORY, download_bytes, list_objects
-from shared.lib.platform_secrets import load_connector_instances
+from shared.lib.platform_secrets import load_connector_instances, load_github_app_connections
 from shared.lib.task_queue import archive_task, count_tasks, list_tasks
 from shared.lib.workflow_paths import discover_workflow_packages, find_workflow_package
 
@@ -299,8 +309,12 @@ class BackgroundJobRunResponse(BaseModel):
     id: str
     job_type: str
     scope: str | None
+    trigger: str | None
+    knowledge_source_id: str | None
+    knowledge_source_version_id: str | None
     status: str
     started_at: str
+    heartbeat_at: str | None
     finished_at: str | None
     duration_sec: float | None
     summary: dict[str, Any]
@@ -313,6 +327,54 @@ class PlatformBackgroundJobsResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class KnowledgeSourceWriteRequest(BaseModel):
+    repository: str
+    credential_ref: str
+    default_ref: str = "main"
+    include_paths: list[str] = Field(default_factory=list)
+    exclude_paths: list[str] = Field(default_factory=list)
+    sync_policy: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+
+
+class GitHubConnectionResponse(BaseModel):
+    name: str
+    web_base_url: str
+
+
+class KnowledgeSourceVersionResponse(BaseModel):
+    id: str
+    commit_sha: str
+    status: str
+    graphify_version: str
+    extraction_config_hash: str
+    artifact_keys: dict[str, Any]
+    artifact_checksums: dict[str, Any]
+    file_count: int
+    node_count: int
+    edge_count: int
+    warnings: list[Any]
+    error: str | None
+    started_at: str | None
+    finished_at: str | None
+    created_at: str
+
+
+class KnowledgeSourceResponse(BaseModel):
+    id: str
+    canonical_alias: str
+    repository_url: str
+    default_ref: str
+    include_paths: list[str]
+    exclude_paths: list[str]
+    credential_ref: str | None
+    sync_policy: dict[str, Any]
+    enabled: bool
+    current_successful_version_id: str | None
+    created_at: str
+    updated_at: str
 
 
 class HindsightMemoryEntryResponse(BaseModel):
@@ -453,9 +515,9 @@ def _humanize_identifier(value: str) -> str:
     return value.replace("-", " ").replace("_", " ").strip().title()
 
 
-def _short_docstring(value: str | None, fallback: str) -> str:
+def _short_docstring(value: str | None, default: str) -> str:
     if not value:
-        return fallback
+        return default
     return value.strip().splitlines()[0].strip()
 
 
@@ -481,7 +543,7 @@ def _mcp_usage_map() -> dict[str, list[str]]:
 
 
 def _enabled_catalog_ids(section_name: str) -> set[str] | None:
-    platform_file = settings.platform_config_file or settings.platform_secrets_file
+    platform_file = settings.platform_config_file
     if not platform_file:
         return None
     path = Path(platform_file)
@@ -607,7 +669,7 @@ def _connector_source_label(config: dict[str, Any]) -> str:
 
 
 def _read_connectors_catalog() -> list[ConnectorResponse]:
-    platform_file = settings.platform_config_file or settings.platform_secrets_file
+    platform_file = settings.platform_config_file
     if not platform_file:
         return []
     instances = load_connector_instances(platform_file)
@@ -991,14 +1053,99 @@ def _background_job_run_response(run: BackgroundJobRun) -> BackgroundJobRunRespo
         id=str(run.id),
         job_type=run.job_type,
         scope=run.scope,
+        trigger=run.trigger,
+        knowledge_source_id=str(run.knowledge_source_id) if run.knowledge_source_id else None,
+        knowledge_source_version_id=(str(run.knowledge_source_version_id) if run.knowledge_source_version_id else None),
         status=run.status,
         started_at=run.started_at.isoformat(),
+        heartbeat_at=run.heartbeat_at.isoformat() if run.heartbeat_at else None,
         finished_at=run.finished_at.isoformat() if run.finished_at else None,
         duration_sec=run.duration_sec,
         summary=run.summary or {},
         warnings=[str(item) for item in (run.warnings or [])],
         error=run.error,
     )
+
+
+def _knowledge_source_version_response(version: KnowledgeSourceVersion) -> KnowledgeSourceVersionResponse:
+    return KnowledgeSourceVersionResponse(
+        id=str(version.id),
+        commit_sha=version.commit_sha,
+        status=version.status,
+        graphify_version=version.graphify_version,
+        extraction_config_hash=version.extraction_config_hash,
+        artifact_keys=version.artifact_keys or {},
+        artifact_checksums=version.artifact_checksums or {},
+        file_count=version.file_count,
+        node_count=version.node_count,
+        edge_count=version.edge_count,
+        warnings=version.warnings or [],
+        error=version.error,
+        started_at=version.started_at.isoformat() if version.started_at else None,
+        finished_at=version.finished_at.isoformat() if version.finished_at else None,
+        created_at=version.created_at.isoformat(),
+    )
+
+
+async def _knowledge_source_response(session, source: KnowledgeSource) -> KnowledgeSourceResponse:
+    return KnowledgeSourceResponse(
+        id=str(source.id),
+        canonical_alias=source.canonical_alias,
+        repository_url=source.repository_url,
+        default_ref=source.default_ref,
+        include_paths=source.include_paths or [],
+        exclude_paths=source.exclude_paths or [],
+        credential_ref=source.credential_ref,
+        sync_policy=source.sync_policy or {},
+        enabled=source.enabled,
+        current_successful_version_id=(
+            str(source.current_successful_version_id) if source.current_successful_version_id else None
+        ),
+        created_at=source.created_at.isoformat(),
+        updated_at=source.updated_at.isoformat(),
+    )
+
+
+def _validated_knowledge_source_values(payload: KnowledgeSourceWriteRequest) -> dict[str, Any]:
+    platform_file = settings.platform_config_file
+    connections = load_github_app_connections(platform_file)
+    connection = connections.get(payload.credential_ref.strip())
+    if connection is None or not connection.web_base_url:
+        raise HTTPException(status_code=422, detail="credential_ref must name a configured GitHub connection")
+    repository = payload.repository.strip().strip("/")
+    repository_parts = repository.split("/")
+    if len(repository_parts) != 2 or any(not part or "." in part or " " in part for part in repository_parts):
+        raise HTTPException(status_code=422, detail="repository must use the format organization/repository")
+    repository_url = f"{connection.web_base_url}/{repository}.git"
+    values = {
+        "canonical_alias": repository_parts[-1],
+        "repository_url": repository_url,
+        "default_ref": payload.default_ref.strip(),
+        "credential_ref": connection.name,
+    }
+    if not values["default_ref"]:
+        raise HTTPException(status_code=422, detail="Knowledge Source default_ref is required")
+    for pattern in [*payload.include_paths, *payload.exclude_paths]:
+        path = Path(pattern)
+        if not pattern or "\\" in pattern or path.is_absolute() or ".." in path.parts:
+            raise HTTPException(status_code=422, detail="Path scopes must be safe repository-relative glob patterns")
+    if payload.sync_policy:
+        interval_sec = payload.sync_policy.get("interval_sec")
+        if (
+            set(payload.sync_policy) != {"interval_sec"}
+            or isinstance(interval_sec, bool)
+            or not isinstance(interval_sec, int)
+        ):
+            raise HTTPException(status_code=422, detail="sync_policy supports only a positive integer interval_sec")
+        if interval_sec <= 0:
+            raise HTTPException(status_code=422, detail="sync_policy interval_sec must be positive")
+    values.update(
+        include_paths=payload.include_paths,
+        exclude_paths=payload.exclude_paths,
+        sync_policy=payload.sync_policy,
+        enabled=payload.enabled,
+    )
+    return values
 
 
 # ─── Agents ──────────────────────────────────────────────────────────
@@ -1635,33 +1782,46 @@ async def get_platform_connectors():
     return _read_connectors_catalog()
 
 
-_GITHUB_HTTPS_REPO_PATTERN = re.compile(r"^https://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$")
-
-
 async def _fetch_github_tags(repo_url: str) -> list[WorkflowRepoVersionResponse]:
-    """List released tags for a github.com https repo URL.
+    """List released tags through the workflow repository's GitHub App connection."""
+    from shared.lib.github_app import (
+        GitHubAppError,
+        github_app_connection,
+        github_installation_token,
+        github_repository_coordinates,
+    )
+    from shared.lib.platform_secrets import load_workflow_repo_github_connection
 
-    Other git hosts are not supported yet — this returns an empty list
-    rather than failing, since version listing is a UI convenience and
-    should not block sync/pin operations.
-    """
-    match = _GITHUB_HTTPS_REPO_PATTERN.match(repo_url)
-    if not match:
-        logger.info("Workflow repo version listing only supports github.com https URLs; got %r", repo_url)
+    platform_config_file = settings.platform_config_file
+    connection_name = load_workflow_repo_github_connection(platform_config_file)
+    if not connection_name:
         return []
 
-    owner, repo = match.group(1), match.group(2)
-    headers = {"Accept": "application/vnd.github+json"}
-    pat = settings.workflow_repo_pat.strip()
-    if pat:
-        headers["Authorization"] = f"Bearer {pat}"
-
     try:
+        connection = github_app_connection(
+            connection_name,
+            platform_config_file=platform_config_file,
+            age_identity=settings.age_identity or None,
+        )
+        owner, repo = github_repository_coordinates(repo_url, connection)
+        token = github_installation_token(
+            connection_name,
+            platform_config_file=platform_config_file,
+            age_identity=settings.age_identity or None,
+        )
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(f"https://api.github.com/repos/{owner}/{repo}/tags", headers=headers)
+            response = await client.get(
+                f"{connection.api_base_url}/repos/{owner}/{repo}/tags",
+                headers=headers,
+            )
             response.raise_for_status()
             tags = response.json()
-    except httpx.HTTPError:
+    except (GitHubAppError, httpx.HTTPError):
         logger.exception("Failed to list workflow repo tags from GitHub")
         return []
 
@@ -1678,11 +1838,7 @@ def _workflow_repo_response(state: Any | None) -> WorkflowRepoResponse:
     remote_source_url = settings.workflow_repo_url.strip() or None
     return WorkflowRepoResponse(
         source_url=remote_source_url,
-        source_path=(
-            None
-            if remote_source_url
-            else settings.workflow_repo_display_path.strip() or None
-        ),
+        source_path=(None if remote_source_url else settings.workflow_repo_display_path.strip() or None),
         source_mode="remote" if remote_source_url else "local",
         default_ref=settings.workflow_repo_ref.strip() or None,
         pinned_ref=state.pinned_ref if state else None,
@@ -1756,11 +1912,36 @@ async def get_platform_memories():
 async def get_platform_background_jobs(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    job_type: str | None = None,
+    status: str | None = None,
+    trigger: str | None = None,
+    knowledge_source_id: uuid.UUID | None = None,
+    started_after: datetime | None = None,
+    started_before: datetime | None = None,
 ):
+    filters = []
+    if job_type:
+        filters.append(BackgroundJobRun.job_type == job_type)
+    if status:
+        filters.append(BackgroundJobRun.status == status)
+    if trigger:
+        filters.append(BackgroundJobRun.trigger == trigger)
+    if knowledge_source_id:
+        filters.append(BackgroundJobRun.knowledge_source_id == knowledge_source_id)
+    if started_after:
+        filters.append(BackgroundJobRun.started_at >= started_after)
+    if started_before:
+        filters.append(BackgroundJobRun.started_at <= started_before)
     async with async_session_factory() as session:
-        total = int((await session.execute(select(func.count()).select_from(BackgroundJobRun))).scalar_one())
+        total = int(
+            (await session.execute(select(func.count()).select_from(BackgroundJobRun).where(*filters))).scalar_one()
+        )
         result = await session.execute(
-            select(BackgroundJobRun).order_by(BackgroundJobRun.started_at.desc()).limit(limit).offset(offset)
+            select(BackgroundJobRun)
+            .where(*filters)
+            .order_by(BackgroundJobRun.started_at.desc(), BackgroundJobRun.id.desc())
+            .limit(limit)
+            .offset(offset)
         )
         runs = result.scalars().all()
 
@@ -1770,6 +1951,139 @@ async def get_platform_background_jobs(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/platform/background-jobs/{run_id}", response_model=BackgroundJobRunResponse)
+async def get_platform_background_job(run_id: uuid.UUID):
+    async with async_session_factory() as session:
+        run = await session.get(BackgroundJobRun, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Background job not found")
+        return _background_job_run_response(run)
+
+
+@router.get("/platform/knowledge-sources", response_model=list[KnowledgeSourceResponse])
+async def list_knowledge_sources():
+    async with async_session_factory() as session:
+        sources = list(
+            (await session.execute(select(KnowledgeSource).order_by(KnowledgeSource.canonical_alias))).scalars()
+        )
+        return [await _knowledge_source_response(session, source) for source in sources]
+
+
+@router.get("/platform/knowledge-sources/github-connections", response_model=list[GitHubConnectionResponse])
+async def list_knowledge_source_github_connections():
+    platform_file = settings.platform_config_file
+    connections = load_github_app_connections(platform_file)
+    return [
+        GitHubConnectionResponse(name=connection.name, web_base_url=connection.web_base_url)
+        for connection in sorted(connections.values(), key=lambda item: item.name)
+        if connection.web_base_url
+    ]
+
+
+@router.post("/platform/knowledge-sources", response_model=KnowledgeSourceResponse, status_code=201)
+async def create_knowledge_source(payload: KnowledgeSourceWriteRequest):
+    values = _validated_knowledge_source_values(payload)
+    async with async_session_factory() as session:
+        source = KnowledgeSource(**values)
+        session.add(source)
+        try:
+            await session.flush()
+            await session.commit()
+        except HTTPException:
+            await session.rollback()
+            raise
+        except Exception as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="Knowledge Source repository already exists") from exc
+        await session.refresh(source)
+        return await _knowledge_source_response(session, source)
+
+
+@router.get("/platform/knowledge-sources/{source_id}", response_model=KnowledgeSourceResponse)
+async def get_knowledge_source(source_id: uuid.UUID):
+    async with async_session_factory() as session:
+        source = await session.get(KnowledgeSource, source_id)
+        if source is None:
+            raise HTTPException(status_code=404, detail="Knowledge Source not found")
+        return await _knowledge_source_response(session, source)
+
+
+@router.put("/platform/knowledge-sources/{source_id}", response_model=KnowledgeSourceResponse)
+async def update_knowledge_source(source_id: uuid.UUID, payload: KnowledgeSourceWriteRequest):
+    values = _validated_knowledge_source_values(payload)
+    async with async_session_factory() as session:
+        source = await session.scalar(select(KnowledgeSource).where(KnowledgeSource.id == source_id).with_for_update())
+        if source is None:
+            raise HTTPException(status_code=404, detail="Knowledge Source not found")
+        for field_name, value in values.items():
+            setattr(source, field_name, value)
+        source.updated_at = datetime.now(UTC)
+        try:
+            await session.commit()
+        except HTTPException:
+            await session.rollback()
+            raise
+        except Exception as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="Knowledge Source repository already exists") from exc
+        await session.refresh(source)
+        return await _knowledge_source_response(session, source)
+
+
+@router.post("/platform/knowledge-sources/{source_id}/sync", response_model=BackgroundJobRunResponse, status_code=202)
+async def queue_knowledge_source_sync(source_id: uuid.UUID):
+    async with async_session_factory() as session:
+        source = await session.get(KnowledgeSource, source_id)
+        if source is None:
+            raise HTTPException(status_code=404, detail="Knowledge Source not found")
+        if not source.enabled:
+            raise HTTPException(status_code=409, detail="Knowledge Source is disabled")
+        active_run_id = await session.scalar(
+            select(BackgroundJobRun.id)
+            .where(
+                BackgroundJobRun.job_type == "knowledge_source_sync",
+                BackgroundJobRun.knowledge_source_id == source.id,
+                BackgroundJobRun.status.in_(("queued", "running")),
+            )
+            .limit(1)
+        )
+        if active_run_id is not None:
+            raise HTTPException(status_code=409, detail=f"Knowledge Source sync is already active: {active_run_id}")
+        run = await queue_background_job(
+            session,
+            job_type="knowledge_source_sync",
+            scope=source.canonical_alias,
+            trigger="manual",
+            knowledge_source_id=source.id,
+            summary={"phase": "queued"},
+        )
+        return _background_job_run_response(run)
+
+
+@router.get(
+    "/platform/knowledge-sources/{source_id}/versions",
+    response_model=list[KnowledgeSourceVersionResponse],
+)
+async def list_knowledge_source_versions(source_id: uuid.UUID, limit: int = Query(default=20, ge=1, le=100)):
+    async with async_session_factory() as session:
+        if await session.get(KnowledgeSource, source_id) is None:
+            raise HTTPException(status_code=404, detail="Knowledge Source not found")
+        versions = list(
+            (
+                await session.execute(
+                    select(KnowledgeSourceVersion)
+                    .where(
+                        KnowledgeSourceVersion.source_id == source_id,
+                        KnowledgeSourceVersion.status == "succeeded",
+                    )
+                    .order_by(KnowledgeSourceVersion.created_at.desc(), KnowledgeSourceVersion.id.desc())
+                    .limit(limit)
+                )
+            ).scalars()
+        )
+        return [_knowledge_source_version_response(version) for version in versions]
 
 
 @router.get("/platform/memories/hindsight/{bank_id}", response_model=HindsightBankDetailResponse)

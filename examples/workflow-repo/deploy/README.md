@@ -33,14 +33,12 @@ The Makefile loads `deploy/compose.env` first, then the generated root
 If your workflow repo defines its own MCP server or connector (see
 [mcps/custom-mcp-example/](../mcps/custom-mcp-example/) and
 [connectors/custom-connector-example/](../connectors/custom-connector-example/)),
-those don't exist in the base compose file and do need an override:
+those don't exist in the base compose file and do need an override. After
+`make bootstrap`, the public Makefile automatically loads the workflow repo's
+`deploy/docker-compose.override.yml` when it exists:
 
 ```sh
-COMPOSE_PROFILES=custom-example \
-docker compose \
-  -f ../agentic-ops-platform/deploy/docker-compose.yml \
-  -f deploy/docker-compose.override.yml \
-  up --build
+COMPOSE_PROFILES=custom-example make up
 ```
 
 Set these when the repos are not sibling directories:

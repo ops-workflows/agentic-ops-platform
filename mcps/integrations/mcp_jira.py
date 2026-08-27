@@ -115,31 +115,6 @@ def _create_issue_v3(
     return response.json()
 
 
-def _create_issue_v2(
-    client: httpx.Client,
-    *,
-    base_url: str,
-    token: str,
-    project: str,
-    title: str,
-    description: str,
-) -> dict[str, Any]:
-    response = client.post(
-        f"{base_url}/rest/api/2/issue",
-        headers=_jira_headers(token),
-        json={
-            "fields": {
-                "project": {"key": project},
-                "summary": title,
-                "description": description,
-                "issuetype": {"name": BUG_ISSUE_TYPE},
-            }
-        },
-    )
-    response.raise_for_status()
-    return response.json()
-
-
 @mcp.tool(annotations={"openWorldHint": True})
 def create_bug_ticket(
     title: Annotated[str, "Short bug title for the Jira issue summary."],
@@ -169,22 +144,8 @@ def create_bug_ticket(
                 title=summary,
                 description=body,
             )
-            api_version = "3"
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code != 404:
-                _raise_jira_error(exc)
-            try:
-                issue = _create_issue_v2(
-                    client,
-                    base_url=base_url,
-                    token=token,
-                    project=project,
-                    title=summary,
-                    description=body,
-                )
-                api_version = "2"
-            except httpx.HTTPStatusError as fallback_exc:
-                _raise_jira_error(fallback_exc)
+            _raise_jira_error(exc)
 
     issue_key = str(issue.get("key") or "")
     issue_id = str(issue.get("id") or "")
@@ -194,7 +155,6 @@ def create_bug_ticket(
         "issue_id": issue_id,
         "issue_key": issue_key,
         "issue_url": browse_url,
-        "api_version": api_version,
     }
 
 

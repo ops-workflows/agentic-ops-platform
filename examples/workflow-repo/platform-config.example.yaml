@@ -29,6 +29,25 @@ config:
   # not cap concurrent subagent/model calls within a running task.
   PLATFORM_MAX_RUNNING_TASKS: "3"
 
+# Platform-owned GitHub App installations. Use one named connection per App
+# installation; repositories select a connection by name. GitHub.com and GHES
+# require separate Apps, app ids, installation ids, and private keys.
+github:
+  workflow_repo_connection: github-public
+  connections:
+    github-public:
+      web_base_url: https://github.com
+      api_base_url: https://api.github.com
+      app_id: "replace-with-app-id"
+      installation_id: "replace-with-installation-id"
+      private_key_secret: github_public_app_private_key
+    # github-enterprise:
+    #   web_base_url: https://github.company.example
+    #   api_base_url: https://github.company.example/api/v3
+    #   app_id: "replace-with-ghes-app-id"
+    #   installation_id: "replace-with-ghes-installation-id"
+    #   private_key_secret: github_enterprise_app_private_key
+
 mcps:
   enabled:
     - message
@@ -39,6 +58,34 @@ mcps:
   #   salesforce:
   #     api_version: v60.0
   #     allowed_objects: [Account, Case, Contact]
+  #   splunk:
+  #     allowed_hosts: [splunk.example.com]
+  #     allowed_indexes: [main]
+  #     max_results: 500
+  #     max_window_hours: 24
+  #     max_evidence_bytes: 65536
+  #     saved_searches:
+  #       example-errors: nobody/search/Example-errors
+  #   evidence:
+  #     redaction_patterns:
+  #       - pattern: 'customer-[A-Z0-9]+'
+  #         replacement: '<customer>'
+  #   cloudwatch:
+  #     allowed_regions: [eu-west-1]
+  #     allowed_account_ids: ['123456789012']
+  #     allowed_log_groups: [/aws/lambda/production-api]
+  #     allowed_log_group_prefixes: []
+  #     alarm_log_group_mappings:
+  #       production-apiAlarm: [/aws/lambda/production-api]
+  #     max_results: 500
+  #     max_window_hours: 24
+  #     max_scan_bytes: 536870912
+  #     max_evidence_bytes: 65536
+  #   github:
+  #     allowed_hosts: [api.github.com, github.company.example]
+  #     max_results: 20
+  #     max_excerpt_lines: 200
+  #     max_file_bytes: 1048576
 
 connectors:
   # `enabled` lists connector instance ids defined under `instances`.
@@ -139,6 +186,10 @@ memory:
     learning: {}
 
 secrets:
+  github_public_app_private_key:
+    encrypted: ENC[age,replace-with-encrypted-github-app-private-key-pem]
+  # github_enterprise_app_private_key:
+  #   encrypted: ENC[age,replace-with-encrypted-ghes-app-private-key-pem]
   message_bus_bot_token:
     encrypted: ENC[age,replace-with-encrypted-token]
   message_bus_app_token:

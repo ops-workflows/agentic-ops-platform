@@ -131,8 +131,7 @@ async def resolve_approval_action(
         approval=approval,
         approved=approved,
         status_message=(
-            f":white_check_mark: Approval **{status_label}** for `{approval.tool_name}` "
-            f"by @{user_id or 'operator'}."
+            f":white_check_mark: Approval **{status_label}** for `{approval.tool_name}` by @{user_id or 'operator'}."
         ),
     )
 

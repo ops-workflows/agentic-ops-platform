@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "knowledge": {
+      "type": "http",
+      "url": "http://mcp-knowledge:8108/mcp"
+    }
+  }
+}

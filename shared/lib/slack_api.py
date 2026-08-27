@@ -13,6 +13,7 @@ class SlackAPIError(Exception):
 
 
 _CHANNEL_ID_RE = re.compile(r"^[CDG][A-Z0-9]{5,}$", re.IGNORECASE)
+_MAX_THREAD_FETCH_PAGES = 50
 
 
 def _headers(bot_token: str) -> dict[str, str]:
@@ -105,6 +106,65 @@ async def get_authenticated_user_id(
         body={},
     )
     return str(payload.get("user_id") or "")
+
+
+async def fetch_thread_messages(
+    client: httpx.AsyncClient,
+    *,
+    api_url: str,
+    bot_token: str,
+    channel_id: str,
+    thread_id: str,
+    current_message_id: str,
+    limit: int = 10,
+) -> list[dict[str, str]]:
+    """Return the latest Slack thread messages through the current reply."""
+    messages: list[dict[str, Any]] = []
+    cursor = ""
+    seen_cursors: set[str] = set()
+    page_count = 0
+    while True:
+        page_count += 1
+        if page_count > _MAX_THREAD_FETCH_PAGES:
+            raise SlackAPIError("Slack thread exceeded the pagination safety limit")
+        body: dict[str, Any] = {
+            "channel": channel_id,
+            "ts": thread_id,
+            "latest": current_message_id,
+            "inclusive": True,
+            "limit": 100,
+        }
+        if cursor:
+            body["cursor"] = cursor
+        payload = await _call(
+            client,
+            api_url=api_url,
+            bot_token=bot_token,
+            method="conversations.replies",
+            body=body,
+        )
+        page = payload.get("messages")
+        if isinstance(page, list):
+            messages.extend(message for message in page if isinstance(message, dict))
+        metadata = payload.get("response_metadata")
+        next_cursor = str(metadata.get("next_cursor") or "") if isinstance(metadata, dict) else ""
+        if not next_cursor:
+            break
+        if next_cursor in seen_cursors:
+            raise SlackAPIError("Slack thread returned a repeated pagination cursor")
+        seen_cursors.add(next_cursor)
+        cursor = next_cursor
+
+    ordered_messages = sorted(messages, key=lambda message: str(message.get("ts") or ""))[-limit:]
+    return [
+        {
+            "message_id": str(message.get("ts") or ""),
+            "author": str(message.get("user") or message.get("username") or message.get("bot_id") or "unknown"),
+            "text": str(message.get("text") or "").strip(),
+        }
+        for message in ordered_messages
+        if str(message.get("text") or "").strip()
+    ]
 
 
 async def resolve_channel_id(

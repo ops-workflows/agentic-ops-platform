@@ -71,10 +71,6 @@ index=app service=auth-service ("token invalid" OR "validation failed" OR "expir
 # LDAP connectivity issues
 index=app service=auth-service ("LDAP" OR "ldap") ("timeout" OR "refused" OR "unreachable") earliest=-2h
 | stats count by _time, error_type
-
-# Certificate errors
-index=app service=auth-service ("certificate" OR "SSL" OR "TLS") ("expired" OR "invalid" OR "untrusted") earliest=-2h
-| stats count by error_detail
 ```
 
 ### Kafka Cluster

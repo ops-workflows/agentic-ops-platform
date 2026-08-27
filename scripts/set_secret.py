@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,7 +26,9 @@ class SecretTarget:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Encrypt and store platform or agent secrets.")
     parser.add_argument("--name", help="Secret env var name, e.g. SERVICE_API_TOKEN")
-    parser.add_argument("--value", help="Secret plaintext value. If omitted, prompt securely.")
+    value_group = parser.add_mutually_exclusive_group()
+    value_group.add_argument("--value", help="Secret plaintext value. If omitted, prompt securely.")
+    value_group.add_argument("--value-file", help="Path to a file containing the secret plaintext value.")
     parser.add_argument("--scope", choices=("shared", "plugin"), help="Secret destination scope")
     parser.add_argument("--plugin", help="Plugin name when --scope=plugin")
     parser.add_argument("--identity", help="Age identity path or inline key")
@@ -51,6 +54,8 @@ def plugins_dir_from_args(args: argparse.Namespace) -> Path:
 def identity_from_args(args: argparse.Namespace) -> str:
     if args.identity:
         return args.identity
+    if os.environ.get("AGE_IDENTITY"):
+        return os.environ["AGE_IDENTITY"]
     return str(repo_root() / "key.txt")
 
 
@@ -76,6 +81,20 @@ def prompt_secret_value() -> str:
         if value:
             return value
         print("Secret value cannot be empty")
+
+
+def secret_value_from_args(args: argparse.Namespace) -> str:
+    if args.value is not None:
+        return args.value
+    if args.value_file:
+        try:
+            value = Path(args.value_file).expanduser().read_text(encoding="utf-8")
+        except OSError as exc:
+            raise SystemExit(f"Failed to read --value-file: {exc}") from exc
+        if not value:
+            raise SystemExit("--value-file cannot be empty")
+        return value
+    return prompt_secret_value()
 
 
 def prompt_target(platform_file: Path, plugins_dir: Path) -> SecretTarget:
@@ -192,7 +211,7 @@ def main() -> int:
     secret_name = (args.name or prompt_secret_name()).strip().upper()
     if not re.fullmatch(r"[A-Z][A-Z0-9_]*", secret_name):
         raise SystemExit("Secret names must match [A-Z][A-Z0-9_]*")
-    secret_value = args.value if args.value is not None else prompt_secret_value()
+    secret_value = secret_value_from_args(args)
     identity = identity_from_args(args)
 
     try:

@@ -40,9 +40,7 @@ def _signal_handler(sig, frame):  # noqa: ARG001
 
 
 def _platform_config_file() -> str:
-    return (
-        os.environ.get("PLATFORM_CONFIG_FILE") or os.environ.get("PLATFORM_SECRETS_FILE") or "/app/platform-config.yaml"
-    )
+    return os.environ.get("PLATFORM_CONFIG_FILE", "/app/platform-config.yaml")
 
 
 def _bootstrap_platform_env() -> None:
@@ -190,6 +188,45 @@ def _extract_email_metadata(metadata: dict[str, Any], config: dict[str, Any]) ->
     return extracted
 
 
+def _configured_strings(value: Any, *, field: str) -> tuple[str, ...]:
+    if value in (None, []):
+        return ()
+    if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
+        raise ValueError(f"{field} must be a list of non-empty strings")
+    return tuple(item.strip() for item in value)
+
+
+def _gcs_payload_allowed(payload: dict[str, Any], config: dict[str, Any]) -> bool:
+    gcs_config = config.get("source", {}).get("gcs_payload") or {}
+    if not isinstance(gcs_config, dict) or not gcs_config.get("enabled"):
+        return True
+
+    allowed_buckets = _configured_strings(
+        gcs_config.get("allowed_buckets"),
+        field="source.gcs_payload.allowed_buckets",
+    )
+    object_prefixes = _configured_strings(
+        gcs_config.get("object_prefixes"),
+        field="source.gcs_payload.object_prefixes",
+    )
+    excluded_object_prefixes = _configured_strings(
+        gcs_config.get("excluded_object_prefixes"),
+        field="source.gcs_payload.excluded_object_prefixes",
+    )
+    bucket_name = _extract_path(payload, str(gcs_config.get("bucket_field") or "bucket"))
+    object_name = _extract_path(payload, str(gcs_config.get("name_field") or "name"))
+    if not bucket_name or not object_name:
+        return bool(gcs_config.get("allow_non_gcs", True))
+
+    bucket = str(bucket_name)
+    object_path = str(object_name)
+    if allowed_buckets and bucket not in allowed_buckets:
+        return False
+    if object_prefixes and not object_path.startswith(object_prefixes):
+        return False
+    return not excluded_object_prefixes or not object_path.startswith(excluded_object_prefixes)
+
+
 def _fetch_gcs_payload(payload: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     gcs_config = config.get("source", {}).get("gcs_payload") or {}
     if not isinstance(gcs_config, dict) or not gcs_config.get("enabled"):
@@ -276,6 +313,10 @@ def _subscriber_callback(loop: asyncio.AbstractEventLoop, config: dict[str, Any]
     def callback(message) -> None:
         payload, payload_text = _decode_payload(message.data)
         try:
+            if not _gcs_payload_allowed(payload, config):
+                logger.info("Ignored Pub/Sub message %s by GCS payload filter", message.message_id)
+                message.ack()
+                return
             future = asyncio.run_coroutine_threadsafe(
                 _create_task(payload, payload_text, dict(message.attributes or {}), config), loop
             )
@@ -289,6 +330,14 @@ def _subscriber_callback(loop: asyncio.AbstractEventLoop, config: dict[str, Any]
     return callback
 
 
+async def _wait_for_subscriber(future) -> None:
+    while not _shutdown:
+        if future.done():
+            future.result()
+            raise RuntimeError("Pub/Sub subscriber stopped unexpectedly")
+        await asyncio.sleep(1)
+
+
 async def run_subscriber(config: dict[str, Any]) -> None:
     from google.cloud import pubsub_v1
 
@@ -297,6 +346,7 @@ async def run_subscriber(config: dict[str, Any]) -> None:
     if not subscription:
         logger.error("GCP_PUBSUB_SUBSCRIPTION or source.subscription must be configured")
         return
+    _gcs_payload_allowed({}, config)
 
     project = str(source.get("project") or os.environ.get("GCP_PROJECT") or "").strip()
     subscriber = pubsub_v1.SubscriberClient()
@@ -307,8 +357,7 @@ async def run_subscriber(config: dict[str, Any]) -> None:
     logger.info("Starting Pub/Sub subscriber: %s", subscription_path)
     future = subscriber.subscribe(subscription_path, callback=_subscriber_callback(asyncio.get_running_loop(), config))
     try:
-        while not _shutdown:
-            await asyncio.sleep(1)
+        await _wait_for_subscriber(future)
     finally:
         future.cancel()
         subscriber.close()

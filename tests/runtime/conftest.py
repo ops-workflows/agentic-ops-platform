@@ -24,6 +24,7 @@ import io
 import os
 import shutil
 import tarfile
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -321,7 +322,7 @@ def local_memory_store(tmp_path):
 @pytest.fixture
 def reset_agent_memory_state(local_memory_store):
     def _reset(agent_name: str = "platform-test") -> None:
-        from docker.errors import NotFound
+        from docker.errors import APIError, NotFound
         from session_manager.memory_sync import _get_docker_client, _get_volume_name
 
         local_memory_store.clear_agent(agent_name)
@@ -330,8 +331,16 @@ def reset_agent_memory_state(local_memory_store):
         for container in client.containers.list(all=True, filters={"volume": volume_name}):
             with contextlib.suppress(Exception):
                 container.remove(force=True)
-        with contextlib.suppress(NotFound):
-            client.volumes.get(volume_name).remove(force=True)
+        for attempt in range(20):
+            try:
+                client.volumes.get(volume_name).remove(force=True)
+                break
+            except NotFound:
+                break
+            except APIError as exc:
+                if exc.status_code != 409 or attempt == 19:
+                    raise
+                time.sleep(0.1)
 
     return _reset
 
@@ -908,61 +917,3 @@ async def gateway_client(gateway_app):
     transport = httpx.ASGITransport(app=gateway_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://gateway-test") as client:
         yield client
-
-
-@pytest_asyncio.fixture
-async def create_task_via_api(gateway_client):
-    """Factory: create a task by posting to the Gateway tasks API.
-
-    Returns the created Task ORM row reloaded from the DB.
-    """
-    from sqlalchemy import select
-
-    from shared.lib.db import async_session_factory
-    from shared.lib.models import Task
-
-    async def _factory(
-        *,
-        workflow: str = "platform-test",
-        prompt: str = "test prompt via api",
-        message_channel: str = "platform-test-channel",
-        message_thread: str = "",
-        task_metadata: dict[str, Any] | None = None,
-    ) -> Task:
-        body = {
-            "workflow": workflow,
-            "prompt": prompt,
-            "message_channel": message_channel,
-            "message_thread": message_thread,
-            "task_metadata": task_metadata or {"channel_id": "test-channel-id"},
-        }
-        # Try canonical task creation endpoint; fall back to direct DB
-        # if the route shape differs.
-        resp = await gateway_client.post("/api/tasks", json=body)
-        if resp.status_code in (200, 201):
-            data = resp.json()
-            tid = data.get("id") or data.get("task_id")
-            if tid:
-                async with async_session_factory() as s:
-                    row = await s.scalar(select(Task).where(Task.id == tid))
-                    if row is not None:
-                        return row
-        # Fallback to direct insert if the API route was unavailable.
-        import uuid as _uuid
-
-        async with async_session_factory() as s:
-            row = Task(
-                id=_uuid.uuid4(),
-                workflow=workflow,
-                prompt=prompt,
-                message_channel=message_channel,
-                message_thread=message_thread,
-                status="running",
-                task_metadata=task_metadata or {"channel_id": "test-channel-id"},
-            )
-            s.add(row)
-            await s.commit()
-            await s.refresh(row)
-            return row
-
-    return _factory

@@ -113,6 +113,9 @@ async def async_engine(database_dsn: str):
         await conn.execute(
             text(
                 "TRUNCATE "
+                "control_plane.background_job_runs, "
+                "control_plane.knowledge_source_versions, "
+                "control_plane.knowledge_sources, "
                 "control_plane.session_events, "
                 "control_plane.approvals, "
                 "control_plane.sessions, "

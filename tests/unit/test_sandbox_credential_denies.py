@@ -22,6 +22,7 @@ pytestmark = pytest.mark.unit
 
 from runtime import session_entrypoint  # noqa: E402
 from runtime.session_entrypoint import (  # noqa: E402
+    _apply_runtime_claude_settings_overrides,
     _build_credential_envvars,
     _resolve_default_agent,
 )
@@ -70,6 +71,43 @@ def test_malformed_entries_are_ignored():
         existing_entries=["not-a-dict", {"mode": "deny"}, {"name": ""}],  # type: ignore[list-item]
     )
     assert out == [{"name": "GOOD_TOKEN", "mode": "deny"}]
+
+
+def test_runtime_sandbox_fails_closed_without_bubblewrap(tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(json.dumps({"sandbox": {"enabled": True}}))
+    monkeypatch.setattr(session_entrypoint, "CLAUDE_SETTINGS_PATH", settings_path)
+    monkeypatch.delenv("CLAUDE_SANDBOX_ENABLE_WEAKER_NESTED", raising=False)
+    monkeypatch.setattr(session_entrypoint, "_bubblewrap_supported", lambda: False)
+
+    with pytest.raises(RuntimeError, match="requires Bubblewrap"):
+        _apply_runtime_claude_settings_overrides()
+
+
+def test_explicit_weaker_nested_sandbox_remains_fail_closed(tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {
+                "sandbox": {
+                    "enabled": True,
+                    "failIfUnavailable": False,
+                    "allowUnsandboxedCommands": True,
+                }
+            }
+        )
+    )
+    monkeypatch.setattr(session_entrypoint, "CLAUDE_SETTINGS_PATH", settings_path)
+    monkeypatch.setenv("CLAUDE_SANDBOX_ENABLE_WEAKER_NESTED", "1")
+
+    _apply_runtime_claude_settings_overrides()
+
+    sandbox = json.loads(settings_path.read_text())["sandbox"]
+    assert sandbox["enabled"] is True
+    assert sandbox["enableWeakerNestedSandbox"] is True
+    assert sandbox["failIfUnavailable"] is True
+    assert sandbox["allowUnsandboxedCommands"] is False
+    assert sandbox["filesystem"]["allowWrite"] == ["/memory"]
 
 
 @pytest.mark.asyncio

@@ -45,6 +45,9 @@ runtimeBundles:
   root: /var/lib/agentic-ops/releases
   objectStoreBucket: agentic-ops-bundles
 
+knowledgeSources:
+  objectStoreBucket: agentic-ops-knowledge-sources
+
 images:
   gateway:
     repository: agentic-ops-gateway
@@ -84,13 +87,17 @@ mcps:
     enabled: true
     module: mcps.integrations.mcp_salesforce
     port: 8102
+  github:
+    enabled: false
+    module: mcps.integrations.mcp_github
+    port: 8107
   custom-example:
     enabled: false
     module: mcp_custom_example
     port: 8110
 
 connectors:
-  gcpPubsub:
+  gcp-pubsub:
     enabled: true
     command:
       - python

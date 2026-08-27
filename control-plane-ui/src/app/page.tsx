@@ -4,6 +4,7 @@ import {
   CalendarClock,
   ChartNoAxesCombined,
   ListTodo,
+  BookOpenText,
   PlugZap,
   ShieldCheck,
   Workflow,
@@ -66,11 +67,18 @@ const DASHBOARD_AREAS: Array<{
     icon: Brain,
   },
   {
-    title: 'Housekeeping',
-    href: '/housekeeping',
+    title: 'Background Jobs',
+    href: '/background-jobs',
     description:
-      'Review background maintenance runs, retention warnings, and cleanup failures.',
+      'Review worker and maintenance runs, progress, warnings, and failures.',
     icon: Wrench,
+  },
+  {
+    title: 'Knowledge Sources',
+    href: '/knowledge-sources',
+    description:
+      'Manage approved repositories, indexing policy, versions, and source health.',
+    icon: BookOpenText,
   },
   {
     title: 'Analytics',

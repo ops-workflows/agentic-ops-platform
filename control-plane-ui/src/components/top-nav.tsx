@@ -12,6 +12,7 @@ const NAV_ITEMS = [
   { href: '/connectors', label: 'Connectors' },
   { href: '/approvals', label: 'Approvals' },
   { href: '/memory', label: 'Memory' },
+  { href: '/knowledge-sources', label: 'Knowledge' },
   { href: '/analytics', label: 'Analytics' },
 ];
 
@@ -36,8 +37,8 @@ function LogoIcon() {
         x2="35"
         y2="31"
         stroke="#C4622D"
-        stroke-width="1.4"
-        stroke-linecap="round"
+        strokeWidth="1.4"
+        strokeLinecap="round"
       />
       <line
         x1="20"
@@ -45,8 +46,8 @@ function LogoIcon() {
         x2="5"
         y2="31"
         stroke="#C4622D"
-        stroke-width="1.4"
-        stroke-linecap="round"
+        strokeWidth="1.4"
+        strokeLinecap="round"
       />
       <line
         x1="5"
@@ -54,8 +55,8 @@ function LogoIcon() {
         x2="35"
         y2="31"
         stroke="#C4622D"
-        stroke-width="1.4"
-        stroke-linecap="round"
+        strokeWidth="1.4"
+        strokeLinecap="round"
       />
       <circle cx="20" cy="5" r="3.7" fill="#C4622D" />
       <circle cx="35" cy="31" r="3.7" fill="#C4622D" />

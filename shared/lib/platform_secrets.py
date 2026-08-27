@@ -50,6 +50,67 @@ class MessageBusConfig:
     action_callback_secret: str = ""
 
 
+@dataclass(frozen=True)
+class GitHubAppConnection:
+    """One GitHub App installation used for a bounded set of repositories."""
+
+    name: str
+    web_base_url: str
+    api_base_url: str
+    app_id: str
+    installation_id: str
+    private_key: str
+
+
+def load_github_app_connections(path: str, *, identity: str | None = None) -> dict[str, GitHubAppConnection]:
+    """Load named GitHub App installations and decrypt only their referenced keys."""
+    data = _read_platform_file(path)
+    github = data.get("github")
+    raw_connections = github.get("connections") if isinstance(github, dict) else None
+    secrets = data.get("secrets") if isinstance(data.get("secrets"), dict) else {}
+    if not isinstance(raw_connections, dict):
+        return {}
+
+    connections: dict[str, GitHubAppConnection] = {}
+    for raw_name, raw_connection in raw_connections.items():
+        name = str(raw_name).strip()
+        if not name or not isinstance(raw_connection, dict):
+            continue
+        private_key_secret = str(raw_connection.get("private_key_secret") or "").strip()
+        private_key = ""
+        if private_key_secret and identity:
+            secret_spec = secrets.get(private_key_secret)
+            if isinstance(secret_spec, dict):
+                private_key = decrypt_named_secrets({private_key_secret: secret_spec}, identity=identity).get(
+                    private_key_secret, ""
+                )
+            else:
+                logger.warning(
+                    "github.connections.%s references missing secret %r in %s",
+                    name,
+                    private_key_secret,
+                    path,
+                )
+        connections[name] = GitHubAppConnection(
+            name=name,
+            web_base_url=str(raw_connection.get("web_base_url") or "").strip().rstrip("/"),
+            api_base_url=str(raw_connection.get("api_base_url") or "").strip().rstrip("/"),
+            app_id=str(raw_connection.get("app_id") or "").strip(),
+            installation_id=str(raw_connection.get("installation_id") or "").strip(),
+            private_key=private_key,
+        )
+    return connections
+
+
+def load_workflow_repo_github_connection(path: str) -> str:
+    """Return the connection selected for workflow-repository runtime operations."""
+    data = _read_platform_file(path)
+    github = data.get("github")
+    if not isinstance(github, dict):
+        return ""
+    return str(github.get("workflow_repo_connection") or "").strip()
+
+
 def load_platform_env(path: str, *, identity: str | None = None) -> dict[str, str]:
     """Load plain config and encrypted secrets from a repo file.
 
@@ -74,7 +135,7 @@ def load_platform_env(path: str, *, identity: str | None = None) -> dict[str, st
         if not isinstance(secret_values, dict):
             logger.warning("Platform config file has no valid 'secrets' mapping: %s", path)
         elif identity:
-            excluded = _message_bus_secret_names(data)
+            excluded = _structured_secret_names(data)
             env_values.update(
                 decrypt_named_secrets(
                     {name: spec for name, spec in secret_values.items() if str(name) not in excluded},
@@ -109,9 +170,7 @@ def load_message_bus_config(path: str, *, identity: str | None = None) -> Messag
         team_name=_message_bus_scalar(message_bus, "team_name", path),
         bot_token=_message_bus_secret(message_bus, secrets, "bot_token_secret", identity, path),
         app_token=_message_bus_secret(message_bus, secrets, "app_token_secret", identity, path),
-        action_callback_secret=_message_bus_secret(
-            message_bus, secrets, "action_callback_secret", identity, path
-        ),
+        action_callback_secret=_message_bus_secret(message_bus, secrets, "action_callback_secret", identity, path),
     )
 
 
@@ -150,6 +209,22 @@ def _message_bus_secret_names(data: dict[str, Any]) -> set[str]:
         _message_bus_scalar(message_bus, reference_key, "platform-config.yaml")
         for reference_key in ("bot_token_secret", "app_token_secret", "action_callback_secret")
     } - {""}
+
+
+def _github_app_secret_names(data: dict[str, Any]) -> set[str]:
+    github = data.get("github")
+    connections = github.get("connections") if isinstance(github, dict) else None
+    if not isinstance(connections, dict):
+        return set()
+    return {
+        str(connection.get("private_key_secret") or "").strip()
+        for connection in connections.values()
+        if isinstance(connection, dict)
+    } - {""}
+
+
+def _structured_secret_names(data: dict[str, Any]) -> set[str]:
+    return _message_bus_secret_names(data) | _github_app_secret_names(data)
 
 
 def load_platform_runtime_env(path: str, *, model_selector: str | None = None) -> dict[str, str | None]:
@@ -221,11 +296,6 @@ def apply_platform_env_defaults(
             continue
         target_env[env_var] = value
     return loaded
-
-
-def load_platform_secret_env(path: str, *, identity: str) -> dict[str, str]:
-    """Backward-compatible wrapper for callers expecting repo secret values."""
-    return load_platform_env(path, identity=identity)
 
 
 def expand_env_placeholders(value: Any, env: Mapping[str, str] | None = None) -> Any:

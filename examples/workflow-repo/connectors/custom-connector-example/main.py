@@ -27,9 +27,7 @@ def _signal_handler(sig, frame):  # noqa: ARG001
 
 
 def _platform_config_file() -> str:
-    return (
-        os.environ.get("PLATFORM_CONFIG_FILE") or os.environ.get("PLATFORM_SECRETS_FILE") or "/app/platform-config.yaml"
-    )
+    return os.environ.get("PLATFORM_CONFIG_FILE", "/app/platform-config.yaml")
 
 
 def _bootstrap_platform_env() -> None:

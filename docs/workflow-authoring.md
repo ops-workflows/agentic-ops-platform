@@ -177,6 +177,6 @@ python scripts/build_workflow_bundle.py my-workflow \
 ```
 
 In normal operation you don't need this — the sync pipeline
-(`make bootstrap`'s first sync, or the control-plane UI's **Sync now**) builds
+(`make bootstrap`'s first sync, `make sync`, or the control-plane UI's **Sync now**) builds
 every discovered workflow's bundle automatically. This is mainly useful for
 inspecting a bundle locally or debugging assembly/shadowing.

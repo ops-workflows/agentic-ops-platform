@@ -1,0 +1,18 @@
+{{- if and .Values.mcps.knowledge.enabled .Values.knowledgeMcp.persistence.enabled (not .Values.knowledgeMcp.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "agentic-ops.fullname" . }}-knowledge-cache
+  labels:
+    app.kubernetes.io/component: mcp
+    app.kubernetes.io/name: knowledge
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.knowledgeMcp.persistence.storageClass }}
+  storageClassName: {{ .Values.knowledgeMcp.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.knowledgeMcp.persistence.size }}
+{{- end }}

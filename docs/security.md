@@ -195,13 +195,20 @@ Tool calls that match a workflow's permission ask-list (glob patterns such as
    call based on that decision — the model never has an unmediated path to
    run a gated action.
 
+Thread context is fetched only after the triggering reply passes the configured
+channel, trigger/rule, sender trust, and alert constraints. The bot can retrieve
+only threads visible to its provider identity, and at most the latest 10
+messages are added to a task prompt. A history-read failure falls back to the
+already-authorized triggering message.
+
 ## Encrypted secrets (age)
 
 Secrets are asymmetrically encrypted with [age](https://age-encryption.org)
 (X25519) via the `pyrage` library, stored as `ENC[age,<base64 ciphertext>]`:
 
 - `AGE_PUBLIC_KEY` (safe to commit) encrypts new values — used by `make
-  set-secret` and any gateway-side secret-entry flow.
+  set-platform-secret`, `make set-workflow-secret WORKFLOW=<name>`, and any
+  gateway-side secret-entry flow.
 - `AGE_IDENTITY` (bootstrap-only, **never committed**) decrypts values at
   container-spawn time, both for platform-wide secrets in
   `platform-config.yaml` and per-workflow secrets in `agent.yaml`. It accepts

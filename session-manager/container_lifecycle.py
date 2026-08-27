@@ -125,7 +125,7 @@ def _active_platform_config_file(release: dict | None = None) -> str:
         snapshot = Path(bundle_root).expanduser() / "platform-config.yaml"
         if snapshot.is_file():
             return str(snapshot)
-    return settings.platform_config_file or settings.platform_secrets_file
+    return settings.platform_config_file
 
 
 def _load_active_release() -> dict | None:
@@ -281,10 +281,9 @@ async def spawn_agent_session(task: Task) -> RuntimeHandle | None:
         agent_config = load_agent_yaml(task.workflow)
         task_metadata = task.task_metadata if isinstance(task.task_metadata, dict) else {}
         runtime = agent_config.get("runtime", {})
-        legacy_reminder = runtime.get("ask_user_question_reminder", {})
-        if not isinstance(legacy_reminder, dict):
-            legacy_reminder = {}
-        reminder_config = legacy_reminder
+        reminder_config = runtime.get("ask_user_question_reminder", {})
+        if not isinstance(reminder_config, dict):
+            reminder_config = {}
         container_image = runtime.get("container_image", "ai-ops-agent-runtime:latest")
         release = _load_active_release()
         platform_file = _active_platform_config_file(release)

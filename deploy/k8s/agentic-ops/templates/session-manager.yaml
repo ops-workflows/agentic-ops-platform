@@ -30,6 +30,8 @@ spec:
               value: {{ .Values.runtimeBundles.root | quote }}
             - name: RUNTIME_BUNDLE_OBJECT_STORE_BUCKET
               value: {{ .Values.runtimeBundles.objectStoreBucket | quote }}
+            - name: KNOWLEDGE_SOURCE_OBJECT_STORE_BUCKET
+              value: {{ .Values.knowledgeSources.objectStoreBucket | quote }}
             - name: KUBERNETES_MEMORY_HELPER_IMAGE
               value: {{ default (printf "%s:%s" .Values.images.sessionManager.repository .Values.images.sessionManager.tag) .Values.sessionManager.env.KUBERNETES_MEMORY_HELPER_IMAGE | quote }}
             - name: KUBERNETES_BOOTSTRAP_SECRET

@@ -238,12 +238,47 @@ async def test_coalesce_merges_into_existing_task(db_session) -> None:
         workflow="platform-test",
         prompt="alert-b",
         coalesce_key="alert-group-1",
-        metadata={"alert_id": "A2"},
+        metadata={
+            "alert_id": "A2",
+            "message_id": "message-2",
+            "alert_envelope": {"state": "recovery"},
+        },
         coalesce_window_sec=600,
     )
     assert merged.id == first.id, "second create must merge into the first"
     alerts = merged.task_metadata.get("coalesced_alerts")
     assert alerts and alerts[0]["alert_id"] == "A2"
+    assert merged.task_metadata["alert_occurrence_count"] == 2
+    assert merged.task_metadata["alert_state_transitions"] == [{"state": "recovery", "message_id": "message-2"}]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_same_key_alerts_create_one_task(async_engine, db_session) -> None:
+    from sqlalchemy import func, select
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from shared.lib.models import Task
+
+    factory = async_sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
+
+    async def create(alert_id: str):
+        async with factory() as session:
+            return await create_task(
+                session,
+                workflow="platform-test",
+                prompt=f"alert-{alert_id}",
+                coalesce_key="concurrent-alert-group",
+                metadata={"alert_id": alert_id},
+                coalesce_window_sec=600,
+            )
+
+    first, second = await asyncio.gather(create("A1"), create("A2"))
+
+    assert first.id == second.id
+    count = await db_session.scalar(
+        select(func.count()).select_from(Task).where(Task.coalesce_key == "concurrent-alert-group")
+    )
+    assert count == 1
 
 
 @pytest.mark.asyncio

@@ -7,7 +7,8 @@ description: Run the scheduled weekly workflow reflection over retained learning
 
 Use this skill for the scheduled weekly workflow-reflection run. The input is not a single RCA. The input is the last week of retained workflow-learning traces for this workflow.
 
-> **Requires**: The agent must have `platform` in its `mcpServers` list to propose updates.
+> **Requires**: The agent must have `memory` and `platform` in its `mcpServers`
+> list to synthesize patterns and propose updates.
 
 ## When to Reflect
 
@@ -17,7 +18,7 @@ Use this skill for the scheduled weekly workflow-reflection run. The input is no
 ## Reflection Procedure
 
 ### Step 1: Synthesize Weekly Learning Patterns
-- Call `reflect_patterns` with `bank_kind="learning"` and `time_range="7d"`
+- Call `mcp__memory__reflect_patterns` with `bank_kind="learning"` and `time_range="7d"`
 - Ask about the last 7 days and about workflow behavior, not business incident themes
 - Focus on recurring investigation patterns such as:
    - repeated tool loops
@@ -26,7 +27,7 @@ Use this skill for the scheduled weekly workflow-reflection run. The input is no
    - unneeded tool calls before the useful one
    - signals that consistently led to resolution
    - skills or instructions that were missing, stale, or misleading
-- If `reflect_patterns` fails or times out, note that explicitly and stop. Do not fall back to `recall_similar` just because reflection failed.
+- If `mcp__memory__reflect_patterns` fails or times out, note that explicitly and stop. Do not fall back to `recall_similar` just because reflection failed.
 
 ### Step 2: Compare Patterns With Current Guidance
 - Read only the current workflow-repo guidance before proposing changes:

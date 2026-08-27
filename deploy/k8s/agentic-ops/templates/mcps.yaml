@@ -30,14 +30,37 @@ spec:
               containerPort: {{ $mcp.port }}
           env:
             {{- include "agentic-ops.commonEnv" $ | nindent 12 }}
+            {{- if eq $name "knowledge" }}
+            - name: KNOWLEDGE_SOURCE_OBJECT_STORE_BUCKET
+              value: {{ required "knowledgeSources.objectStoreBucket is required" $.Values.knowledgeSources.objectStoreBucket | quote }}
+            - name: KNOWLEDGE_SOURCE_SERVING_CACHE_ROOT
+              value: {{ $.Values.knowledgeMcp.cacheRoot | quote }}
+            - name: KNOWLEDGE_SOURCE_REFRESH_INTERVAL_SEC
+              value: {{ $.Values.knowledgeMcp.refreshIntervalSec | quote }}
+            - name: KNOWLEDGE_SOURCE_CACHE_VERSIONS_TO_KEEP
+              value: {{ $.Values.knowledgeMcp.versionsToKeep | quote }}
+            {{- end }}
           {{- if $.Values.bootstrap.existingSecret }}
           envFrom:
             {{- include "agentic-ops.bootstrapEnvFrom" $ | nindent 12 }}
           {{- end }}
           volumeMounts:
             {{- include "agentic-ops.commonVolumeMounts" $ | nindent 12 }}
+            {{- if eq $name "knowledge" }}
+            - name: knowledge-serving-cache
+              mountPath: {{ $.Values.knowledgeMcp.cacheRoot }}
+            {{- end }}
       volumes:
         {{- include "agentic-ops.commonVolumes" $ | nindent 8 }}
+        {{- if eq $name "knowledge" }}
+        - name: knowledge-serving-cache
+          {{- if $.Values.knowledgeMcp.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ default (printf "%s-knowledge-cache" (include "agentic-ops.fullname" $)) $.Values.knowledgeMcp.persistence.existingClaim }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service

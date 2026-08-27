@@ -37,6 +37,7 @@ MCP_PROFILES = {
     "splunk": "splunk",
     "cloudwatch": "cloudwatch",
     "jira": "jira",
+    "github": "github",
 }
 
 # connectors.instances.<id>.type -> compose profile name.

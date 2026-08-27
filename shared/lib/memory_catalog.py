@@ -17,9 +17,7 @@ WORKFLOW_BANKS: dict[str, dict[str, str]] = {"business": {}, "learning": {}}
 
 def load_workflow_banks(platform_file: str | None = None) -> dict[str, dict[str, str]]:
     """Load workflow-to-memory-bank routing from platform-config.yaml."""
-    path_value = (
-        platform_file if platform_file is not None else settings.platform_config_file or settings.platform_secrets_file
-    )
+    path_value = platform_file if platform_file is not None else settings.platform_config_file
     banks = {kind: dict(mapping) for kind, mapping in WORKFLOW_BANKS.items()}
     if not path_value:
         return banks

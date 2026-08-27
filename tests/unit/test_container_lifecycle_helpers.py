@@ -85,7 +85,6 @@ def test_active_platform_config_prefers_synced_snapshot(monkeypatch, tmp_path):
     snapshot = bundle_root / "platform-config.yaml"
     snapshot.write_text("default_model_profile: synced\n", encoding="utf-8")
     monkeypatch.setattr(settings, "platform_config_file", str(mounted_config))
-    monkeypatch.setattr(settings, "platform_secrets_file", "")
     monkeypatch.setattr(settings, "runtime_bundle_root", str(bundle_root))
 
     assert _active_platform_config_file() == str(snapshot)
@@ -95,7 +94,6 @@ def test_active_platform_config_falls_back_before_first_sync(monkeypatch, tmp_pa
     mounted_config = tmp_path / "mounted-platform-config.yaml"
     mounted_config.write_text("default_model_profile: mounted\n", encoding="utf-8")
     monkeypatch.setattr(settings, "platform_config_file", str(mounted_config))
-    monkeypatch.setattr(settings, "platform_secrets_file", "")
     monkeypatch.setattr(settings, "runtime_bundle_root", str(tmp_path / "bundles"))
 
     assert _active_platform_config_file() == str(mounted_config)

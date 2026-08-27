@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from session_manager.main import _workflow_priority
 
 pytestmark = pytest.mark.unit

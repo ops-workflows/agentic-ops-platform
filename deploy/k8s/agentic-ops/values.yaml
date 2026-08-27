@@ -71,6 +71,9 @@ images:
   sessionManager:
     repository: agentic-ops-session-manager
     tag: latest
+  knowledgeIndexer:
+    repository: agentic-ops-knowledge-indexer
+    tag: latest
   controlPlaneUi:
     repository: agentic-ops-control-plane-ui
     tag: latest
@@ -91,6 +94,25 @@ sessionManager:
     RUNTIME_LAUNCHER: kubernetes
     KUBERNETES_MEMORY_HELPER_IMAGE: ""
 
+knowledgeSources:
+  objectStoreBucket: ""
+
+knowledgeIndexer:
+  replicas: 1
+  cacheRoot: /var/lib/agentic-ops/knowledge-indexer
+  pollIntervalSec: 30
+  staleRunSec: 3600
+
+knowledgeMcp:
+  cacheRoot: /var/lib/agentic-ops/knowledge
+  refreshIntervalSec: 30
+  versionsToKeep: 2
+  persistence:
+    enabled: true
+    existingClaim: ""
+    storageClass: ""
+    size: 20Gi
+
 controlPlaneUi:
   replicas: 1
   port: 3000
@@ -106,6 +128,10 @@ mcps:
     enabled: true
     module: mcps.core.mcp_memory
     port: 8103
+  knowledge:
+    enabled: true
+    module: mcps.core.mcp_knowledge
+    port: 8108
   platform:
     enabled: true
     module: mcps.core.mcp_platform
@@ -126,6 +152,10 @@ mcps:
     enabled: false
     module: mcps.integrations.mcp_jira
     port: 8106
+  github:
+    enabled: false
+    module: mcps.integrations.mcp_github
+    port: 8107
 
 connectors:
   servicenow:

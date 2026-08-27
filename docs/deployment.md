@@ -4,19 +4,22 @@
 
 `make bootstrap` runs `scripts/bootstrap.py`, a guided prompt that produces
 the **layer 1** bootstrap artifact described in
-[Configuration](configuration.md) — it never reads or writes the workflow
-repo's `platform-config.yaml`.
+[Configuration](configuration.md). For a remote source it clones or refreshes
+the initial local checkout, but never modifies its `platform-config.yaml`.
 
 Prompts:
 
 1. **Deployment target** — `compose` or `kubernetes`.
-2. **Workflow source** — `remote` (git URL + ref + optional PAT) or `local`
-   (a filesystem checkout path). `compose`
-   only supports `local` today (it bind-mounts a checkout); `kubernetes`
-   expects `remote`.
-3. **Repo URL/ref/PAT** (remote) or **local checkout path** plus optional
-   GitHub URL/PAT (local). The local checkout remains the sync source; the
-   GitHub values enable version lookup and reflection PRs for that same repo.
+2. **Workflow source** — `remote` (git URL + ref + initial checkout path) or
+   `local` (an existing filesystem checkout path). Compose bind-mounts the
+   checkout; Kubernetes uses the checkout's config for cold start and then
+   performs remote syncs with the configured GitHub App.
+3. **One-time clone PAT** (remote only, optional for public repositories). It
+   is supplied to Git only through a temporary `GIT_ASKPASS` process and is
+   never written to `compose.env`, a Kubernetes Secret, the Git remote URL, or
+   platform config. All subsequent workflow sync, Knowledge Source sync,
+   version lookup, reflection PR, and GitHub MCP operations use the named
+   GitHub App connections in `platform-config.yaml`.
    Kubernetes bootstrap also prompts for the target namespace; use the same
    namespace with `helm upgrade`.
 4. **AGE identity** — an armored
@@ -32,13 +35,14 @@ Generated artifact per target (none of these are committed):
 | Target | Artifact | Apply |
 | --- | --- | --- |
 | `compose` | `compose.env` | `make up` |
-| `kubernetes` | `dist/bootstrap/k8s-secret.sh` | run the script to create/update a `Secret` |
+| `kubernetes` | `dist/bootstrap/k8s-secret.sh` | run the script to create/update bootstrap and `platform-config.yaml` Secrets |
 
 ## Kubernetes deployment
 
-Bootstrap creates only the operator-owned `agentic-ops-bootstrap` Secret. It
-does not create the repo-owned `platform-config.yaml` Secret, container images,
-object-store buckets, or Helm release.
+Bootstrap creates the operator-owned `agentic-ops-bootstrap` Secret and an
+`agentic-ops-platform-config` Secret from the initial checkout. It does not
+create container images, object-store buckets, or the Helm release. Configure
+the chart with `platformConfig.existingSecret=agentic-ops-platform-config`.
 
 Use the following command after creating/pushing the image tags referenced by
 your workflow repo's `deploy/k8s-values.yaml` and provisioning the configured
@@ -46,11 +50,11 @@ object-store bucket for workflow releases and agent memory:
 
 ```sh
 make k8s-deploy \
-   K8S_RELEASE=corp-agentic-ops \
+   K8S_RELEASE=agentic-ops \
    K8S_NAMESPACE=agentic-ops \
    K8S_VALUES_FILE=/path/to/workflow-repo/deploy/k8s-values.yaml \
    K8S_PLATFORM_CONFIG_FILE=/path/to/workflow-repo/platform-config.yaml \
-   K8S_PLATFORM_CONFIG_SECRET=corp-agentic-ops-platform-config
+   K8S_PLATFORM_CONFIG_SECRET=agentic-ops-platform-config
 ```
 
 `k8s-deploy` applies the generated bootstrap Secret, upserts the
@@ -118,6 +122,14 @@ restores agent memory from object storage before the runtime starts and uploads
 it after the runtime signals completion. PostgreSQL, self-hosted MinIO, and
 Hindsight remain the only chart-managed components that need durable PVCs.
 
+Large Knowledge Source repositories can require more memory during Graphify
+extraction than a default local Docker VM provides. The Compose
+`knowledge-indexer` has no container memory limit, so increasing a Compose
+limit does not increase available memory; size the Docker Desktop or Rancher
+Desktop VM instead. A 16 GiB VM is a practical starting point for large source
+trees. For Kubernetes, give the `knowledge-indexer` pod a corresponding memory
+request and limit through the deployment's resource policy.
+
 ## Local development (uncommitted working tree)
 
 In the bootstrap prompt, choose the `local` workflow source so
@@ -126,6 +138,9 @@ In the bootstrap prompt, choose the `local` workflow source so
 filesystem checkout. **Sync now** rebuilds the bundle from whatever is
 currently on disk — no git fetch, no commit, no pinned tag required. Object
 storage is optional in this mode; a local `RUNTIME_BUNDLE_ROOT` works fine.
+When the workflow repository contains `deploy/docker-compose.override.yml`,
+bootstrap records it as `WORKFLOW_COMPOSE_OVERRIDE_FILE` and the Makefile loads
+it after the public base stack.
 
 ## `make` targets
 
@@ -133,7 +148,9 @@ storage is optional in this mode; a local `RUNTIME_BUNDLE_ROOT` works fine.
 | --- | --- |
 | `init` | `uv sync --extra dev`. |
 | `bootstrap` | Run `scripts/bootstrap.py` interactively. |
-| `set-secret` | Interactively encrypt and store a platform or agent secret. |
+| `sync` | Rebuild the active platform/workflow release through `GATEWAY_URL` (default `http://localhost:8080`). |
+| `set-platform-secret` | Interactively encrypt a secret in the configured `platform-config.yaml`, then sync. |
+| `set-workflow-secret WORKFLOW=<name>` | Interactively encrypt a secret in the selected workflow's `agent.yaml`, then sync. |
 | `compose-build` | Build all Compose services. |
 | `runtime-build` | Build the `ai-ops-agent-runtime` image. |
 | `build` | `runtime-build` + `compose-build`. |
@@ -146,7 +163,7 @@ storage is optional in this mode; a local `RUNTIME_BUNDLE_ROOT` works fine.
 | `unit-tests` | `tests/unit` (no infra). |
 | `service-tests` | `tests/service` against real Postgres. |
 | `runtime-tests` | `tests/runtime` against real Postgres + Docker. |
-| `test` | All three suites. |
+| `tests` | All three suites. |
 | `clean-test-containers` | Remove dangling test session containers. |
 | `format` / `lint` | ruff fix+format / ruff check+format-check. |
 
@@ -158,7 +175,8 @@ storage is optional in this mode; a local `RUNTIME_BUNDLE_ROOT` works fine.
   `../examples/workflow-repo/platform-config.example.yaml`),
   `HOST_WORKFLOW_REPO_PATH` (default `../examples/workflow-repo/workflows`),
   and `RUNTIME_BUNDLE_ROOT`. Optional profiles: `model-gateway`, `local-llm`,
-  `salesforce`, `splunk`, `cloudwatch`, `jira`, `servicenow`, `gcp-pubsub`.
+   `salesforce`, `splunk`, `cloudwatch`, `github`, `jira`, `servicenow`,
+   `gcp-pubsub`.
 - `deploy/k8s/agentic-ops` — Kubernetes (Helm) chart; instance values select the
    platform-config secret/configmap, ephemeral workflow clone/release caches,
    object-store release bucket, bootstrap Secret, and which MCPs/connectors
@@ -195,8 +213,8 @@ plain https plus the standard library `tarfile`.
 
 ## Sync and versioning
 
-Sync — whether the initial bootstrap sync or the UI **Sync now** button — runs
-one pipeline (`shared/lib/workflow_repo_sync.py::sync_workflow_repo`):
+Sync — whether the initial bootstrap sync, `make sync`, or the UI **Sync now**
+button — runs one pipeline (`shared/lib/workflow_repo_sync.py::sync_workflow_repo`):
 
 1. Fetch the source at the effective ref (pinned ref if set, else the
    bootstrap `WORKFLOW_REPO_REF`) — or read the current working tree in

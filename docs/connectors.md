@@ -79,6 +79,10 @@ source:
     enabled: true
     bucket_field: bucket                       # dot-path into the decoded JSON payload
     name_field: name
+    allowed_buckets: [example-alerts]           # optional exact bucket admission list
+    object_prefixes: [salesforce-alerts/]       # optional object-path prefix admission list
+    excluded_object_prefixes: [salesforce-alerts/archive/]
+    allow_non_gcs: true                         # messages without both bucket/name fields remain eligible
     metadata_key: object_text                  # metadata key the fetched text is stored under
     max_bytes: 200000                          # truncate the object read at this size
     parser: text                               # `text` (default) or `email` for RFC 822/MIME files
@@ -105,6 +109,9 @@ coalescing:
 
 Notes: messages are decoded as UTF-8 JSON (non-JSON still creates a task with
 `payload_text`); a failed task creation `nack`s the message for redelivery.
+GCS bucket/object filters apply only when both configured payload fields are
+present. With `allow_non_gcs: true` (the default), other Pub/Sub payload shapes
+continue to create tasks; set it to `false` for a GCS-only subscription.
 For `gcs_payload.parser: email`, the connector extracts `email_subject`,
 `email_sender`, `email_recipient`, `email_date`, and `email_body_text`.
 `metadata_key` is populated with the readable body, preferring `text/plain` and
@@ -131,7 +138,6 @@ type: servicenow
 source:
   type: polling
   interval_sec: 60
-  instance_url: ${SERVICENOW_INSTANCE_URL}
   table: incident
   query: "state=1^priority<=3"                 # encoded sysparm_query
   fields:                                      # optional; limits sysparm_fields
@@ -155,9 +161,10 @@ coalescing:
 ```
 
 Notes: requests use `sysparm_display_value=true` so `extract` can read
-`<field>.display_value`. Requires `SERVICENOW_USERNAME` /
-`SERVICENOW_PASSWORD` (normally supplied encrypted via `platform-config.yaml`
-`secrets:`).
+`<field>.display_value`. The target workflow's `agent.yaml` supplies
+`SERVICENOW_INSTANCE_URL` under `env` and encrypted `SERVICENOW_USERNAME` /
+`SERVICENOW_PASSWORD` entries under `secrets`. Polling, parsing, and coalescing
+behavior remains in the platform connector instance.
 
 ## Adding a new connector implementation
 

@@ -16,6 +16,7 @@ expected by Claude Code from this flat layout at session start.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -35,7 +36,21 @@ class MessageRoute:
 
     workflow: str
     channel: str
-    trigger_words: tuple[str, ...]
+    trigger_words: tuple[str, ...] = ()
+    rule_id: str = ""
+    provider: str = ""
+    priority: int = 0
+    match_type: str = "prefix"
+    pattern: str = ""
+    trusted_user_ids: tuple[str, ...] = ()
+    trusted_webhook_ids: tuple[str, ...] = ()
+    trusted_webhook_names: tuple[str, ...] = ()
+    allow_bot: bool = False
+    root_posts_only: bool = False
+    preserve_full_body: bool = False
+    allowed_accounts: tuple[str, ...] = ()
+    allowed_environments: tuple[str, ...] = ()
+    coalesce_window_sec: int = 300
 
 
 @lru_cache(maxsize=1)
@@ -73,6 +88,8 @@ def _message_routes(workflows: list[tuple[str, dict]]) -> list[MessageRoute]:
     routes: list[MessageRoute] = []
     for workflow, config in workflows:
         messaging = _messaging_config(config)
+        runtime = config.get("runtime") if isinstance(config.get("runtime"), dict) else {}
+        coalesce_window_sec = int(runtime.get("alert_coalesce_window_sec", 300))
         triggers = tuple(
             trigger
             for raw_trigger in messaging.get("trigger_words", ["@agent"])
@@ -81,7 +98,76 @@ def _message_routes(workflows: list[tuple[str, dict]]) -> list[MessageRoute]:
         for raw_channel in messaging.get("channels") or []:
             channel = str(raw_channel).strip().lower()
             if channel and triggers:
-                routes.append(MessageRoute(workflow=workflow, channel=channel, trigger_words=triggers))
+                routes.append(
+                    MessageRoute(
+                        workflow=workflow,
+                        channel=channel,
+                        trigger_words=triggers,
+                        coalesce_window_sec=coalesce_window_sec,
+                    )
+                )
+        for raw_rule in messaging.get("rules") or []:
+            if not isinstance(raw_rule, dict) or raw_rule.get("enabled", True) is False:
+                continue
+            rule_id = str(raw_rule.get("id") or "").strip()
+            match = raw_rule.get("match") if isinstance(raw_rule.get("match"), dict) else {}
+            match_type = str(match.get("type") or "").strip().lower()
+            pattern = str(match.get("pattern") or "").strip()
+            if not rule_id or match_type not in {"prefix", "regex"} or not pattern:
+                raise ValueError(f"Workflow {workflow!r} has an invalid messaging rule")
+            if len(pattern) > 256:
+                raise ValueError(f"Workflow {workflow!r} messaging rule {rule_id!r} pattern is too long")
+            if match_type == "regex":
+                if any(token in pattern for token in ("(", ")", "{", "}", "|", "+")) or pattern.count("*") > 8:
+                    raise ValueError(f"Workflow {workflow!r} messaging rule {rule_id!r} uses unsupported regex syntax")
+                try:
+                    re.compile(pattern)
+                except re.error as exc:
+                    raise ValueError(
+                        f"Workflow {workflow!r} messaging rule {rule_id!r} has invalid regex: {exc}"
+                    ) from exc
+
+            trusted = raw_rule.get("trusted_senders")
+            trusted = trusted if isinstance(trusted, dict) else {}
+            constraints = raw_rule.get("constraints")
+            constraints = constraints if isinstance(constraints, dict) else {}
+            rule_channels = raw_rule.get("channels") or messaging.get("channels") or []
+            for raw_channel in rule_channels:
+                channel = str(raw_channel).strip().lower()
+                if not channel:
+                    continue
+                routes.append(
+                    MessageRoute(
+                        workflow=workflow,
+                        channel=channel,
+                        rule_id=rule_id,
+                        provider=str(raw_rule.get("provider") or "").strip().lower(),
+                        priority=int(raw_rule.get("priority") or 0),
+                        match_type=match_type,
+                        pattern=pattern,
+                        trusted_user_ids=tuple(
+                            str(value).strip() for value in trusted.get("user_ids") or [] if str(value).strip()
+                        ),
+                        trusted_webhook_ids=tuple(
+                            str(value).strip() for value in trusted.get("webhook_ids") or [] if str(value).strip()
+                        ),
+                        trusted_webhook_names=tuple(
+                            str(value).strip() for value in trusted.get("webhook_names") or [] if str(value).strip()
+                        ),
+                        allow_bot=bool(raw_rule.get("allow_bot", False)),
+                        root_posts_only=bool(raw_rule.get("root_posts_only", False)),
+                        preserve_full_body=bool(raw_rule.get("preserve_full_body", False)),
+                        allowed_accounts=tuple(
+                            str(value).strip() for value in constraints.get("accounts") or [] if str(value).strip()
+                        ),
+                        allowed_environments=tuple(
+                            str(value).strip().lower()
+                            for value in constraints.get("environments") or []
+                            if str(value).strip()
+                        ),
+                        coalesce_window_sec=coalesce_window_sec,
+                    )
+                )
     return routes
 
 

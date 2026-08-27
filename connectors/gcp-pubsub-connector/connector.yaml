@@ -21,6 +21,10 @@ source:
   #   enabled: true
   #   bucket_field: bucket
   #   name_field: name
+  #   allowed_buckets: [example-alerts]
+  #   object_prefixes: [salesforce-alerts/]
+  #   excluded_object_prefixes: [salesforce-alerts/archive/]
+  #   allow_non_gcs: true
   #   metadata_key: object_text
   #   max_bytes: 200000
 

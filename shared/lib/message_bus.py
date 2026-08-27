@@ -87,6 +87,7 @@ class MattermostMessageBus:
             self.set_thread_id(thread_id)
         return MessageRef(id=message_id, thread_id=thread_id, raw=post)
 
+
 class SlackMessageBus:
     """Slack-backed MessageBus implementation using the Web API."""
 
@@ -131,6 +132,7 @@ class SlackMessageBus:
         if resolved_thread and not thread_ts:
             self.set_thread_id(resolved_thread)
         return MessageRef(id=message_ts, thread_id=resolved_thread, raw=payload)
+
 
 def build_message_bus(
     *,

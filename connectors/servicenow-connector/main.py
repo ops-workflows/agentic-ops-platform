@@ -16,7 +16,9 @@ from typing import Any
 
 import httpx
 
+from shared.lib.crypto import decrypt_agent_secrets
 from shared.lib.platform_secrets import apply_platform_env_defaults, load_connector_instance
+from shared.lib.workflow_paths import find_workflow_package
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,9 +35,7 @@ def _signal_handler(sig, frame):
 
 
 def _platform_config_file() -> str:
-    return (
-        os.environ.get("PLATFORM_CONFIG_FILE") or os.environ.get("PLATFORM_SECRETS_FILE") or "/app/platform-config.yaml"
-    )
+    return os.environ.get("PLATFORM_CONFIG_FILE", "/app/platform-config.yaml")
 
 
 def _bootstrap_platform_env() -> None:
@@ -53,6 +53,38 @@ def _load_instance_config() -> dict:
     if not config:
         raise RuntimeError(f"Connector instance {instance_id!r} not found in {_platform_config_file()}")
     return config
+
+
+def _load_target_workflow_env(config: dict) -> dict[str, str]:
+    target = config.get("target") if isinstance(config.get("target"), dict) else {}
+    workflow = str(target.get("workflow") or "").strip()
+    if not workflow:
+        raise RuntimeError("ServiceNow connector target.workflow must be configured")
+
+    package = find_workflow_package(workflow)
+    if package is None:
+        raise RuntimeError(f"ServiceNow target workflow {workflow!r} was not found")
+
+    workflow_env: dict[str, str] = {}
+    configured_env = package.config.get("env")
+    if isinstance(configured_env, dict):
+        workflow_env.update(
+            {
+                str(key): str(value)
+                for key, value in configured_env.items()
+                if isinstance(value, (str, int, float, bool))
+            }
+        )
+
+    secrets = package.config.get("secrets")
+    if isinstance(secrets, dict) and secrets:
+        workflow_env.update(
+            decrypt_agent_secrets(
+                package.config,
+                identity=os.environ.get("AGE_IDENTITY", ""),
+            )
+        )
+    return workflow_env
 
 
 def _extract_nested(data: dict, dot_path: str) -> Any:
@@ -163,14 +195,15 @@ async def _create_task_from_incident(parsed: dict, config: dict) -> None:
 async def run_polling_consumer(config: dict) -> None:
     """Poll ServiceNow Table API for new incidents."""
     source = config.get("source", {})
-    instance_url = source.get("instance_url") or os.environ.get("SERVICENOW_INSTANCE_URL", "")
+    workflow_env = _load_target_workflow_env(config)
+    instance_url = workflow_env.get("SERVICENOW_INSTANCE_URL", "")
     table = source.get("table", "incident")
     query = source.get("query", "state=1^priority<=3")
     fields = source.get("fields", [])
     interval = source.get("interval_sec", 60)
 
-    username = os.environ.get("SERVICENOW_USERNAME", "")
-    password = os.environ.get("SERVICENOW_PASSWORD", "")
+    username = workflow_env.get("SERVICENOW_USERNAME", "")
+    password = workflow_env.get("SERVICENOW_PASSWORD", "")
 
     if not instance_url:
         logger.error("SERVICENOW_INSTANCE_URL must be configured")

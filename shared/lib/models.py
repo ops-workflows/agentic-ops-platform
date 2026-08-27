@@ -14,6 +14,7 @@ from sqlalchemy import (
     Index,
     Integer,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -219,6 +220,8 @@ class BackgroundJobRun(Base):
     __tablename__ = "background_job_runs"
     __table_args__ = (
         Index("idx_background_job_runs_job_type", "job_type", "started_at"),
+        Index("idx_background_job_runs_source", "knowledge_source_id", "started_at"),
+        Index("idx_background_job_runs_version", "knowledge_source_version_id"),
         Index("idx_background_job_runs_started_at", "started_at"),
         {"schema": "control_plane"},
     )
@@ -226,13 +229,95 @@ class BackgroundJobRun(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     job_type: Mapped[str] = mapped_column(Text, nullable=False)
     scope: Mapped[str | None] = mapped_column(Text)
+    trigger: Mapped[str | None] = mapped_column(Text)
+    knowledge_source_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("control_plane.knowledge_sources.id", ondelete="SET NULL")
+    )
+    knowledge_source_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("control_plane.knowledge_source_versions.id", ondelete="SET NULL")
+    )
     status: Mapped[str] = mapped_column(Text, nullable=False, default="running")
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     duration_sec: Mapped[float | None] = mapped_column(Float)
     summary: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     warnings: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     error: Mapped[str | None] = mapped_column(Text)
+
+
+class KnowledgeSource(Base):
+    __tablename__ = "knowledge_sources"
+    __table_args__ = (
+        Index("idx_knowledge_sources_enabled", "enabled"),
+        {"schema": "control_plane"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    canonical_alias: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    repository_url: Mapped[str] = mapped_column(Text, nullable=False)
+    default_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    include_paths: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    exclude_paths: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    credential_ref: Mapped[str | None] = mapped_column(Text)
+    sync_policy: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    current_successful_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("control_plane.knowledge_source_versions.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+    versions: Mapped[list[KnowledgeSourceVersion]] = relationship(
+        "KnowledgeSourceVersion",
+        back_populates="source",
+        cascade="all, delete-orphan",
+        foreign_keys="KnowledgeSourceVersion.source_id",
+    )
+    current_successful_version: Mapped[KnowledgeSourceVersion | None] = relationship(
+        "KnowledgeSourceVersion",
+        foreign_keys=[current_successful_version_id],
+        post_update=True,
+    )
+
+
+class KnowledgeSourceVersion(Base):
+    __tablename__ = "knowledge_source_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_id",
+            "commit_sha",
+            "graphify_version",
+            "extraction_config_hash",
+            name="uq_knowledge_source_versions_identity",
+        ),
+        Index("idx_knowledge_source_versions_source", "source_id", "created_at"),
+        Index("idx_knowledge_source_versions_status", "status", "created_at"),
+        {"schema": "control_plane"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("control_plane.knowledge_sources.id", ondelete="CASCADE"), nullable=False
+    )
+    commit_sha: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    graphify_version: Mapped[str] = mapped_column(Text, nullable=False)
+    extraction_config_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_keys: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    artifact_checksums: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    file_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    node_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    edge_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    warnings: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+    source: Mapped[KnowledgeSource] = relationship(
+        "KnowledgeSource", back_populates="versions", foreign_keys=[source_id]
+    )
 
 
 class WorkflowRepoState(Base):

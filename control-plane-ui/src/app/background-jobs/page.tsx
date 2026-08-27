@@ -7,7 +7,7 @@ import {
   type PlatformBackgroundJobs,
 } from '@/lib/api';
 
-const PAGE_SIZE = 5;
+const PAGE_SIZE = 20;
 const EMPTY_BACKGROUND: PlatformBackgroundJobs = {
   items: [],
   total: 0,
@@ -15,21 +15,31 @@ const EMPTY_BACKGROUND: PlatformBackgroundJobs = {
   offset: 0,
 };
 
-export default function HousekeepingPage() {
+export default function BackgroundJobsPage() {
   const [data, setData] = useState<PlatformBackgroundJobs>(EMPTY_BACKGROUND);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [jobType, setJobType] = useState('');
+  const [status, setStatus] = useState('');
+  const [trigger, setTrigger] = useState('');
 
   async function load() {
     setError(null);
     try {
+      const params = new URLSearchParams({
+        limit: String(PAGE_SIZE),
+        offset: '0',
+      });
+      if (jobType) params.set('job_type', jobType);
+      if (status) params.set('status', status);
+      if (trigger) params.set('trigger', trigger);
       const payload = await apiFetch<PlatformBackgroundJobs>(
-        `/api/platform/background-jobs?limit=${PAGE_SIZE}&offset=0`,
+        `/api/platform/background-jobs?${params.toString()}`,
       );
       setData(payload);
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : 'Failed to load housekeeping runs',
+        err instanceof Error ? err.message : 'Failed to load background jobs',
       );
     } finally {
       setLoading(false);
@@ -38,7 +48,7 @@ export default function HousekeepingPage() {
 
   useEffect(() => {
     load();
-  }, []);
+  }, [jobType, status, trigger]);
 
   const latestRun = data.items[0] || null;
   const previousRuns = data.items.slice(1);
@@ -65,7 +75,7 @@ export default function HousekeepingPage() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="font-display text-4xl font-normal leading-[1.1] tracking-tight text-[var(--color-text-primary)]">
-            Background maintenance runs
+            Background jobs
           </h1>
         </div>
         <button
@@ -74,6 +84,27 @@ export default function HousekeepingPage() {
         >
           Refresh
         </button>
+      </div>
+
+      <div className="grid gap-3 border-y border-ops-border py-4 sm:grid-cols-3">
+        <FilterSelect
+          label="Job type"
+          value={jobType}
+          onChange={setJobType}
+          options={['housekeeping', 'knowledge_source_sync']}
+        />
+        <FilterSelect
+          label="Status"
+          value={status}
+          onChange={setStatus}
+          options={['queued', 'running', 'succeeded', 'failed', 'skipped']}
+        />
+        <FilterSelect
+          label="Trigger"
+          value={trigger}
+          onChange={setTrigger}
+          options={['manual', 'scheduled', 'retry']}
+        />
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -96,9 +127,15 @@ export default function HousekeepingPage() {
       {latestRun ? (
         <div className="rounded-card border border-ops-border bg-ops-surface p-6 shadow-card">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-            <p className="text-[11px] uppercase tracking-[0.22em] text-[var(--color-text-tertiary)]">
-              Latest Run
-            </p>
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.22em] text-[var(--color-text-tertiary)]">
+                Latest Run
+              </p>
+              <p className="mt-2 font-mono text-xs text-[var(--color-text-tertiary)]">
+                {humanizeLabel(latestRun.job_type)} ·{' '}
+                {latestRun.scope || 'platform'} · {latestRun.id}
+              </p>
+            </div>
 
             <StatusBadge status={latestRun.status} />
           </div>
@@ -152,7 +189,7 @@ export default function HousekeepingPage() {
 
       {loading ? (
         <p className="text-sm text-[var(--color-text-tertiary)]">
-          Loading housekeeping runs...
+          Loading background jobs...
         </p>
       ) : null}
       {error ? (
@@ -164,7 +201,7 @@ export default function HousekeepingPage() {
           {data.items.length === 0 ? (
             <EmptyMessage
               title="No background jobs recorded yet"
-              description="Housekeeping runs will appear here once the session manager persists them."
+              description="Worker and maintenance runs will appear here once they are queued."
             />
           ) : previousRuns.length > 0 ? (
             previousRuns.map((job) => (
@@ -186,7 +223,16 @@ function BackgroundJobRow({ job }: { job: BackgroundJobRun }) {
     <div className="rounded-[20px] border border-ops-border bg-[var(--color-surface-raised)] p-5">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div className="space-y-3">
-          <StatusBadge status={job.status} />
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusBadge status={job.status} />
+            <SmallBadge label={humanizeLabel(job.job_type)} tone="info" />
+            {job.trigger ? (
+              <SmallBadge label={job.trigger} tone="neutral" />
+            ) : null}
+          </div>
+          <p className="font-mono text-xs text-[var(--color-text-tertiary)]">
+            {job.scope || 'platform'} · {job.id}
+          </p>
 
           {job.error ? (
             <div className="rounded-[16px] border border-[var(--color-error)]/15 bg-[var(--color-error-muted)] px-4 py-3 text-sm leading-6 text-[var(--color-text-secondary)]">
@@ -227,6 +273,36 @@ function BackgroundJobRow({ job }: { job: BackgroundJobRun }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: string[];
+}) {
+  return (
+    <label className="space-y-1 text-xs text-[var(--color-text-tertiary)]">
+      <span>{label}</span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full border border-ops-border bg-ops-surface px-3 py-2 text-sm text-[var(--color-text-primary)]"
+      >
+        <option value="">All</option>
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {humanizeLabel(option)}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 

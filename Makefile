@@ -9,15 +9,21 @@ TEST_DB_NAME ?= agentic_ops_test
 TEST_PG_PORT ?= 55432
 TEST_DATABASE_URL ?= postgresql+asyncpg://$(PGUSER):$(PGPASSWORD)@localhost:$(TEST_PG_PORT)/$(TEST_DB_NAME)
 RUNTIME_IMAGE ?= ai-ops-agent-runtime:latest
+MCP_IMAGE ?= ai-ops-mcp:latest
 RUNTIME_BUILD ?= docker build
 SANDBOX_MODE ?= macos
 COMPOSE_PROJECT_NAME ?= aiops-test
 TEST_DOCKER_NETWORK ?= $(COMPOSE_PROJECT_NAME)-network
 COMPOSE_BOOTSTRAP_ENV_FILE ?= compose.env
 WORKFLOW_COMPOSE_ENV_FILE ?= $(shell sed -n 's/^WORKFLOW_COMPOSE_ENV_FILE=//p' "$(COMPOSE_BOOTSTRAP_ENV_FILE)" 2>/dev/null | tail -1)
+WORKFLOW_COMPOSE_OVERRIDE_FILE ?= $(shell sed -n 's/^WORKFLOW_COMPOSE_OVERRIDE_FILE=//p' "$(COMPOSE_BOOTSTRAP_ENV_FILE)" 2>/dev/null | tail -1)
+HOST_WORKFLOW_REPO_PATH ?= $(shell sed -n 's/^HOST_WORKFLOW_REPO_PATH=//p' "$(COMPOSE_BOOTSTRAP_ENV_FILE)" 2>/dev/null | tail -1)
 HOST_PLATFORM_CONFIG_FILE ?= $(shell sed -n 's/^HOST_PLATFORM_CONFIG_FILE=//p' "$(COMPOSE_BOOTSTRAP_ENV_FILE)" 2>/dev/null | tail -1)
+AGE_IDENTITY ?= $(shell sed -n 's/^AGE_IDENTITY=//p' "$(COMPOSE_BOOTSTRAP_ENV_FILE)" 2>/dev/null | tail -1)
+GATEWAY_URL ?= http://localhost:8080
 COMPOSE_ENV_FILES := $(if $(wildcard $(WORKFLOW_COMPOSE_ENV_FILE)),--env-file "$(WORKFLOW_COMPOSE_ENV_FILE)") $(if $(wildcard $(COMPOSE_BOOTSTRAP_ENV_FILE)),--env-file "$(COMPOSE_BOOTSTRAP_ENV_FILE)")
-COMPOSE ?= docker compose $(COMPOSE_ENV_FILES) -f deploy/docker-compose.yml
+COMPOSE_FILES := -f deploy/docker-compose.yml $(if $(wildcard $(WORKFLOW_COMPOSE_OVERRIDE_FILE)),-f "$(WORKFLOW_COMPOSE_OVERRIDE_FILE)")
+COMPOSE ?= docker compose $(COMPOSE_ENV_FILES) $(COMPOSE_FILES)
 K8S_CHART ?= deploy/k8s/agentic-ops
 K8S_BOOTSTRAP_SCRIPT ?= dist/bootstrap/k8s-secret.sh
 K8S_RELEASE ?=
@@ -30,9 +36,9 @@ K8S_HELM_FLAGS ?= --wait --atomic
 # database only starts Postgres, so provide inert values for runtime-only secrets.
 TEST_COMPOSE ?= AGE_IDENTITY=test-only-not-a-real-age-key LLM_API_KEY=test-only-not-a-real-llm-key PG_PORT=$(TEST_PG_PORT) DOCKER_NETWORK=$(TEST_DOCKER_NETWORK) docker compose --project-name $(COMPOSE_PROJECT_NAME) -f deploy/docker-compose.yml
 
-.PHONY: help unit-tests service-tests runtime-tests test \
-	ensure-test-db up compose-build runtime-build clean-test-containers \
-	init bootstrap set-secret k8s-bootstrap k8s-platform-config k8s-upgrade \
+.PHONY: help unit-tests service-tests runtime-tests tests \
+	ensure-test-db up compose-build runtime-build mcp-build clean-test-containers \
+	init bootstrap sync set-platform-secret set-workflow-secret k8s-bootstrap k8s-platform-config k8s-upgrade \
 	k8s-deploy k8s-update
 
 init: ## Install Python dependencies
@@ -41,8 +47,27 @@ init: ## Install Python dependencies
 bootstrap: ## Guided operator bootstrap (workflow-repo pointer, AGE identity, model key)
 	$(PYTHON) scripts/bootstrap.py
 
-set-secret: ## Interactively encrypt and store a platform or agent secret
-	$(PYTHON) scripts/set_secret.py
+sync: ## Sync platform config and workflows through the running gateway
+	@curl --fail --silent --show-error --request POST "$(GATEWAY_URL)/api/platform/workflow-repo/sync" | \
+		$(PYTHON) -c 'import json, sys; payload = json.load(sys.stdin); status = payload.get("last_sync_status"); message = "Workflow sync completed." if status == "ok" else "Workflow sync failed: " + str(payload.get("last_sync_error") or "unknown error"); print(message, file=sys.stdout if status == "ok" else sys.stderr); raise SystemExit(status != "ok")'
+
+set-platform-secret: ## Encrypt a secret in the configured platform-config.yaml
+	@test -n "$(HOST_PLATFORM_CONFIG_FILE)" || (echo "HOST_PLATFORM_CONFIG_FILE is not configured; run make bootstrap." >&2; exit 1)
+	@test -f "$(HOST_PLATFORM_CONFIG_FILE)" || (echo "Platform config not found: $(HOST_PLATFORM_CONFIG_FILE)" >&2; exit 1)
+	@AGE_IDENTITY="$(AGE_IDENTITY)" $(PYTHON) scripts/set_secret.py \
+		--scope shared \
+		--platform-file "$(HOST_PLATFORM_CONFIG_FILE)"
+	@$(MAKE) sync
+
+set-workflow-secret: ## Encrypt a secret in WORKFLOW=<workflow>/agent.yaml
+	@test -n "$(WORKFLOW)" || (echo "Set WORKFLOW, for example: make set-workflow-secret WORKFLOW=online-alerts-investigator" >&2; exit 1)
+	@test -n "$(HOST_WORKFLOW_REPO_PATH)" || (echo "HOST_WORKFLOW_REPO_PATH is not configured; run make bootstrap." >&2; exit 1)
+	@test -f "$(HOST_WORKFLOW_REPO_PATH)/workflows/$(WORKFLOW)/agent.yaml" || (echo "Workflow not found: $(HOST_WORKFLOW_REPO_PATH)/workflows/$(WORKFLOW)/agent.yaml" >&2; exit 1)
+	@AGE_IDENTITY="$(AGE_IDENTITY)" $(PYTHON) scripts/set_secret.py \
+		--scope plugin \
+		--plugin "$(WORKFLOW)" \
+		--plugins-dir "$(HOST_WORKFLOW_REPO_PATH)/workflows"
+	@$(MAKE) sync
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*## "}; {printf "%-28s %s\n", $$1, $$2}'
@@ -52,6 +77,9 @@ compose-build: ## Build all docker compose services
 
 runtime-build: ## Build the runtime container image
 	$(RUNTIME_BUILD) -t $(RUNTIME_IMAGE) -f runtime/Dockerfile .
+
+mcp-build: ## Build the shared MCP server container image used by runtime smoke tests
+	docker build -t $(MCP_IMAGE) -f mcps/Dockerfile .
 
 build: runtime-build compose-build ## Build all docker images
 
@@ -113,14 +141,14 @@ unit-tests: ## Run unit tests (no infra required)
 service-tests: ensure-test-db ## Run service/Postgres tests
 	TEST_DATABASE_URL='$(TEST_DATABASE_URL)' $(PYTEST) tests/service $(PYTEST_FLAGS)
 
-runtime-tests: ensure-test-db runtime-build ## Run runtime scenario tests (Postgres + Docker required)
+runtime-tests: ensure-test-db runtime-build mcp-build ## Run runtime scenario tests (Postgres + Docker required)
 	TEST_DATABASE_URL='$(TEST_DATABASE_URL)' TEST_RUNTIME_ENABLED=1 SANDBOX_MODE=$(SANDBOX_MODE) DOCKER_NETWORK=$(TEST_DOCKER_NETWORK) \
-		COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) \
+		COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) MCP_TEST_IMAGE=$(MCP_IMAGE) \
 		$(PYTEST) tests/runtime $(PYTEST_TIMEOUT_FLAGS) $(PYTEST_FLAGS)
 
-test: ensure-test-db runtime-build ## Run all three suites (unit + service + runtime)
+tests: ensure-test-db runtime-build mcp-build ## Run all tests, including unit, service, and runtime scenarios
 	TEST_DATABASE_URL='$(TEST_DATABASE_URL)' TEST_RUNTIME_ENABLED=1 SANDBOX_MODE=$(SANDBOX_MODE) DOCKER_NETWORK=$(TEST_DOCKER_NETWORK) \
-		COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) \
+		COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) MCP_TEST_IMAGE=$(MCP_IMAGE) \
 		$(PYTEST) tests $(PYTEST_FLAGS)
 
 clean-test-containers: ## Remove dangling test session containers

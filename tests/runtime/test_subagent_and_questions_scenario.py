@@ -73,12 +73,22 @@ async def test_subagent_delegation(
                 respond=[{"type": "text", "text": "Helper completed: SUBAGENT_OK"}],
                 stop_reason="end_turn",
             ),
+            # The async task notification arrives after the prior parent result.
+            # The runtime requires this post-notification coordinator result.
+            Turn(
+                respond=[{"type": "text", "text": "Helper completed: SUBAGENT_OK"}],
+                stop_reason="end_turn",
+            ),
         ]
     )
 
     task = await create_task(prompt="Delegate to the helper and report its reply.")
     exit_code, logs = await spawn_and_wait(task, timeout_sec=240)
     assert exit_code == 0, f"Container exited {exit_code}.\nLogs:\n{logs}"
+    assert "Stream closed" not in logs
+
+    completion = next(event for event in collected_events if event.get("event_type") == "session_complete")
+    assert "Helper completed: SUBAGENT_OK" in completion["data"]["result_preview"]
 
     requests = mock_llm.recorded_requests()
     assert len(requests) >= 2, (
@@ -186,6 +196,7 @@ def _watch_for_post_and_reply(
     matcher: str,
     reply: str,
     provider: str = "mattermost",
+    delay_sec: float = 0.0,
     timeout: float = 60.0,
 ):
     """Wait for a question post, then deliver its reply through gateway ingress."""
@@ -202,6 +213,8 @@ def _watch_for_post_and_reply(
         post = await loop.run_in_executor(None, _wait)
         if post is None:
             return None
+        if delay_sec > 0:
+            await asyncio.sleep(delay_sec)
         from gateway.message_ingress import GatewayMessageIngress
         from shared.lib.message_ingress import InboundMessage
 
@@ -234,6 +247,7 @@ def _watch_for_post_and_reply(
 @pytest.mark.asyncio
 async def test_ask_user_question_approve(
     require_runtime,
+    monkeypatch,
     mock_llm,
     fake_mattermost,
     collected_events,
@@ -243,6 +257,16 @@ async def test_ask_user_question_approve(
     async_engine,
     _fake_services,
 ) -> None:
+    from session_manager import container_lifecycle
+
+    original_runtime_env = container_lifecycle._get_platform_runtime_env
+
+    def runtime_env_with_short_progress_timeout(**kwargs):
+        runtime_env = original_runtime_env(**kwargs)
+        runtime_env["CLAUDE_QUERY_PROGRESS_TIMEOUT_SEC"] = "3"
+        return runtime_env
+
+    monkeypatch.setattr(container_lifecycle, "_get_platform_runtime_env", runtime_env_with_short_progress_timeout)
     mock_llm.set_scenario(
         [
             Turn(
@@ -283,6 +307,7 @@ async def test_ask_user_question_approve(
         fake_mattermost,
         matcher="proceed",
         reply="1",
+        delay_sec=7.0,
         timeout=120,
     )
     admit_task = asyncio.create_task(admit_when_resume_pending(task.id, workflow=task.workflow, timeout=120))
@@ -293,6 +318,10 @@ async def test_ask_user_question_approve(
     await admit_task
 
     assert exit_code == 0, f"Container exited {exit_code}.\nLogs:\n{logs}"
+    event_types = [event.get("event_type") for event in collected_events]
+    assert "user_question_requested" in event_types
+    assert "user_question_resolved" in event_types
+    assert "session_timeout" not in event_types
 
     factory = async_sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
     from shared.lib.models import TaskEvent

@@ -4,17 +4,17 @@
 Agentic Ops config has three layers (see docs/roadmap for the full picture):
 
 1. Bootstrap / infra (this script) — the minimum needed to cold-start and
-   reach the workflow repo: which repo/ref/PAT to sync, the age identity used
-   to decrypt its secrets, and the model gateway API key. Operator-owned,
-   generated, never committed.
+    reach the workflow repo: its URL/ref, an optional one-time clone PAT, the
+    age identity used to decrypt its secrets, and the model gateway API key.
+    Operator-owned, generated, never committed; the PAT is never generated.
 2. Instance config — the workflow repo's own `platform-config.yaml` (message
    bus, mcps, connectors, memory banks, model profiles, workflow secrets).
    Read only after the repo has been fetched using layer 1.
 3. Workflow packages — `workflows/`, `skills/`, `hooks/`, custom `mcps/`,
    `connectors/` inside the workflow repo.
 
-This script only produces layer 1. It never reads or writes the workflow
-repo's `platform-config.yaml`.
+This script produces layer 1 and, for Kubernetes, publishes the checkout's
+unchanged `platform-config.yaml` as a startup Secret.
 
 Run through `make bootstrap`. The script always prompts for the operator-owned
 bootstrap values and writes the standard artifact for the selected target.
@@ -23,10 +23,14 @@ bootstrap values and writes the standard artifact for the selected target.
 from __future__ import annotations
 
 import getpass
+import shutil
 import stat
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+from shared.lib.github_app import github_git_auth_environment
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -53,15 +57,10 @@ class BootstrapConfig:
             raise ValueError(f"Deployment target must be one of {VALID_TARGETS}, got {self.target!r}")
         if self.source not in VALID_SOURCES:
             raise ValueError(f"Workflow source must be one of {VALID_SOURCES}, got {self.source!r}")
-        if self.source == "remote" and self.target == "compose":
-            raise ValueError(
-                "compose deployments bind-mount a local workflow-repo checkout today; "
-                "select local for compose or kubernetes for git-based sync"
-            )
         if self.source == "remote" and not self.repo_url:
             raise ValueError("Workflow repo URL is required for a remote source")
-        if self.source == "local" and not self.local_path:
-            raise ValueError("Local workflow-repo checkout path is required for a local source")
+        if not self.local_path:
+            raise ValueError("Local workflow-repo checkout path is required")
         if not self.age_identity:
             raise ValueError("AGE identity is required")
         if not self.llm_api_key:
@@ -97,23 +96,26 @@ def build_bootstrap_env(config: BootstrapConfig) -> dict[str, str]:
         "LLM_API_KEY": config.llm_api_key,
         "PG_PASSWORD": config.pg_password,
         "OBJECT_STORE_SECRET_KEY": config.object_store_secret_key,
-        "WORKFLOW_REPO_SOURCE": config.source,
+        "WORKFLOW_REPO_SOURCE": "local" if config.target == "compose" else config.source,
     }
     if config.source == "remote":
         env["WORKFLOW_REPO_URL"] = config.repo_url
         env["WORKFLOW_REPO_REF"] = config.repo_ref
-        if config.repo_pat:
-            env["WORKFLOW_REPO_PAT"] = config.repo_pat
+        if config.target == "compose":
+            local_path = str(Path(config.local_path).expanduser())
+            env["HOST_WORKFLOW_REPO_PATH"] = local_path
+            env["HOST_PLATFORM_CONFIG_FILE"] = str(Path(local_path) / "platform-config.yaml")
+            env["WORKFLOW_COMPOSE_ENV_FILE"] = str(Path(local_path) / "deploy" / "compose.env")
+            env["WORKFLOW_COMPOSE_OVERRIDE_FILE"] = str(Path(local_path) / "deploy" / "docker-compose.override.yml")
     else:
         local_path = str(Path(config.local_path).expanduser())
         if config.repo_url:
             env["WORKFLOW_REPO_URL"] = config.repo_url
-        if config.repo_pat:
-            env["WORKFLOW_REPO_PAT"] = config.repo_pat
         if config.target == "compose":
             env["HOST_WORKFLOW_REPO_PATH"] = local_path
             env["HOST_PLATFORM_CONFIG_FILE"] = str(Path(local_path) / "platform-config.yaml")
             env["WORKFLOW_COMPOSE_ENV_FILE"] = str(Path(local_path) / "deploy" / "compose.env")
+            env["WORKFLOW_COMPOSE_OVERRIDE_FILE"] = str(Path(local_path) / "deploy" / "docker-compose.override.yml")
         else:
             env["WORKFLOW_REPO_PATHS"] = local_path
     if config.target == "kubernetes":
@@ -139,10 +141,12 @@ def render_k8s_secret_script(
     env: dict[str, str],
     *,
     secret_name: str = "agentic-ops-bootstrap",  # noqa: S107 - resource name, not a credential
+    platform_config_file: str = "",
+    platform_config_secret_name: str = "agentic-ops-platform-config",  # noqa: S107
     namespace: str = "default",
 ) -> str:
     literals = " \\\n  ".join(f"--from-literal={key}={_shell_quote(value)}" for key, value in env.items())
-    return (
+    script = (
         "#!/usr/bin/env bash\n"
         "# Generated by scripts/bootstrap.py -- do not commit. Run once per cluster/namespace.\n"
         "set -euo pipefail\n\n"
@@ -151,6 +155,45 @@ def render_k8s_secret_script(
         f"  {literals} \\\n"
         "  --dry-run=client -o yaml | kubectl apply -f -\n"
     )
+    if platform_config_file:
+        script += (
+            "\n"
+            f"kubectl create secret generic {platform_config_secret_name} \\\n"
+            f"  --namespace {namespace} \\\n"
+            f"  --from-file=platform-config.yaml={_shell_quote(platform_config_file)} \\\n"
+            "  --dry-run=client -o yaml | kubectl apply -f -\n"
+        )
+    return script
+
+
+def prepare_workflow_repo(config: BootstrapConfig) -> Path:
+    """Clone or refresh the initial checkout without persisting its bootstrap PAT."""
+    checkout = Path(config.local_path).expanduser()
+    if config.source == "local":
+        return checkout
+    git_binary = shutil.which("git")
+    if not git_binary:
+        raise RuntimeError("git is required to clone the workflow repository")
+    checkout.parent.mkdir(parents=True, exist_ok=True)
+    with github_git_auth_environment(config.repo_pat) as git_environment:
+        if (checkout / ".git").is_dir():
+            commands = [
+                [git_binary, "-C", str(checkout), "remote", "set-url", "origin", config.repo_url],
+                [git_binary, "-C", str(checkout), "fetch", "--all", "--prune"],
+            ]
+        elif checkout.exists() and any(checkout.iterdir()):
+            raise RuntimeError(f"Workflow repository checkout is not empty: {checkout}")
+        else:
+            commands = [[git_binary, "clone", config.repo_url, str(checkout)]]
+        if config.repo_ref:
+            commands.append([git_binary, "-C", str(checkout), "checkout", config.repo_ref])
+        for command in commands:
+            subprocess.run(  # noqa: S603 - operator-provided repository and validated command shape.
+                command,
+                check=True,
+                env=dict(git_environment),
+            )
+    return checkout
 
 
 def write_artifact(config: BootstrapConfig, *, output_dir: Path = REPO_ROOT) -> Path:
@@ -162,7 +205,11 @@ def write_artifact(config: BootstrapConfig, *, output_dir: Path = REPO_ROOT) -> 
 
     path = output_dir / "dist" / "bootstrap" / "k8s-secret.sh"
     path.parent.mkdir(parents=True, exist_ok=True)
-    content = render_k8s_secret_script(env, namespace=config.namespace)
+    content = render_k8s_secret_script(
+        env,
+        namespace=config.namespace,
+        platform_config_file=str(Path(config.local_path).expanduser() / "platform-config.yaml"),
+    )
     path.write_text(content, encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IEXEC)
     return path
@@ -187,11 +234,11 @@ def gather_config_interactively() -> BootstrapConfig:
     if source == "remote":
         repo_url = _prompt("Workflow repo URL")
         repo_ref = _prompt("Workflow repo ref (tag or SHA)", default="main")
-        repo_pat = _prompt("Workflow repo PAT (blank for public repos)", secret=True)
+        local_path = _prompt("Initial local checkout path")
+        repo_pat = _prompt("One-time clone PAT (blank for public repos; never stored)", secret=True)
     elif source == "local":
         local_path = _prompt("Local workflow-repo checkout path")
         repo_url = _prompt("Workflow GitHub URL (for version lookup and reflection PRs; blank to disable)")
-        repo_pat = _prompt("Workflow repo PAT (read plus PR creation; blank for public read-only repos)", secret=True)
 
     namespace = _prompt("Kubernetes namespace", default="default") if target == "kubernetes" else "default"
 
@@ -220,7 +267,8 @@ def main() -> int:
 
     try:
         config.validate()
-    except ValueError as exc:
+        prepare_workflow_repo(config)
+    except (OSError, RuntimeError, subprocess.CalledProcessError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
@@ -229,7 +277,10 @@ def main() -> int:
     if config.target == "compose":
         print("Run: make up")
     else:
-        print(f"Run {path} to create the {config.target} secret, then deploy as usual.")
+        print(
+            f"Run {path} to create the bootstrap and platform-config secrets, then set "
+            "platformConfig.existingSecret=agentic-ops-platform-config and deploy."
+        )
     return 0
 
 

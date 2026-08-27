@@ -13,31 +13,48 @@ from fastmcp.dependencies import CurrentHeaders
 from starlette.responses import JSONResponse
 
 from mcps.common import bootstrap_platform_env, get_env
+from shared.lib.github_app import (
+    GitHubAppError,
+    github_app_connection,
+    github_installation_token,
+    github_repository_coordinates,
+)
+from shared.lib.platform_secrets import load_workflow_repo_github_connection
 
 bootstrap_platform_env()
 
 GATEWAY_URL = get_env("GATEWAY_URL", "http://gateway:8080")
 WORKFLOW_REPO_URL = get_env("WORKFLOW_REPO_URL", "")
-WORKFLOW_REPO_PAT = get_env("WORKFLOW_REPO_PAT", "")
-GITHUB_API = "https://api.github.com"
-GITHUB_URL_PATTERN = re.compile(r"^(?:https://github\.com/|git@github\.com:)([^/]+)/([^/]+?)(?:\.git)?/?$")
+PLATFORM_CONFIG_FILE = get_env("PLATFORM_CONFIG_FILE", "/app/platform-config.yaml")
+AGE_IDENTITY = get_env("AGE_IDENTITY", "")
 
 mcp = FastMCP("Platform MCP Server")
 
 
-def _github_headers() -> dict[str, str]:
+def _github_headers(token: str) -> dict[str, str]:
     return {
-        "Authorization": f"Bearer {WORKFLOW_REPO_PAT}",
+        "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
 
-def _workflow_github_repo() -> str:
-    match = GITHUB_URL_PATTERN.fullmatch(WORKFLOW_REPO_URL.strip())
-    if not match:
-        return ""
-    return f"{match.group(1)}/{match.group(2)}"
+def _workflow_github_context() -> tuple[str, str, str, str]:
+    connection_name = load_workflow_repo_github_connection(PLATFORM_CONFIG_FILE)
+    if not connection_name:
+        raise GitHubAppError("github.workflow_repo_connection is required for reflection PRs")
+    connection = github_app_connection(
+        connection_name,
+        platform_config_file=PLATFORM_CONFIG_FILE,
+        age_identity=AGE_IDENTITY or None,
+    )
+    owner, repo = github_repository_coordinates(WORKFLOW_REPO_URL, connection)
+    token = github_installation_token(
+        connection_name,
+        platform_config_file=PLATFORM_CONFIG_FILE,
+        age_identity=AGE_IDENTITY or None,
+    )
+    return connection.api_base_url, owner, repo, token
 
 
 def _validate_skill_path(file_path: str) -> None:
@@ -101,12 +118,13 @@ def propose_skill_update(
 ) -> dict[str, Any]:
     """Use this during reflection to propose a reusable skill or agent update as a GitHub PR."""
     _validate_skill_path(file_path)
-    github_repo = _workflow_github_repo()
-    if not WORKFLOW_REPO_PAT or not github_repo:
-        return {"error": "A GitHub WORKFLOW_REPO_URL and WORKFLOW_REPO_PAT are required for PR proposals"}
+    try:
+        api_base_url, owner, repo, token = _workflow_github_context()
+    except GitHubAppError as exc:
+        return {"error": str(exc)}
 
-    repo_api = f"{GITHUB_API}/repos/{github_repo}"
-    github_headers = _github_headers()
+    repo_api = f"{api_base_url}/repos/{owner}/{repo}"
+    github_headers = _github_headers(token)
 
     with httpx.Client(timeout=30.0) as client:
         repo_response = client.get(repo_api, headers=github_headers)

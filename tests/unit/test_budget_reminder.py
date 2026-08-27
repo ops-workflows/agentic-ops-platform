@@ -6,6 +6,7 @@ helpers from the runtime entrypoint.
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import os
 import time
@@ -40,6 +41,39 @@ def _get_sep():
     import runtime.session_entrypoint as sep
 
     return sep
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wait_kind", ["user_input", "approval"])
+async def test_query_progress_watchdog_waits_while_human_input_is_active(monkeypatch, wait_kind):
+    sep = _get_sep()
+    monkeypatch.setattr(sep, "QUERY_PROGRESS_TIMEOUT_SEC", 0.01)
+    output_queue = asyncio.Queue()
+    progress_state: dict = {}
+
+    async def stalled_query():
+        await asyncio.Event().wait()
+
+    async def delayed_output():
+        await asyncio.sleep(0.03)
+        await output_queue.put(("message", "answer received"))
+
+    query_task = asyncio.create_task(stalled_query())
+    output_task = asyncio.create_task(delayed_output())
+    try:
+        with sep._track_human_wait(progress_state, kind=wait_kind):
+            event = await sep._next_query_event(
+                output_queue,
+                query_task,
+                progress_state,
+                first_message_received=True,
+            )
+    finally:
+        query_task.cancel()
+        await output_task
+
+    assert event == ("message", "answer received")
+    assert "active_human_waits" not in progress_state
 
 
 # ── Reminder gating ──────────────────────────────────────────
@@ -206,6 +240,17 @@ def test_send_message_to_completed_subagent_is_a_resume():
         )
         is None
     )
+
+
+def test_task_started_replaces_stale_pending_resume_id():
+    sep = _get_sep()
+    task_owners = {"child-task": "stale-send-message-tool"}
+    pending = {"stale-send-message-tool"}
+
+    sep._set_pending_subagent_owner("child-task", "started-tool", task_owners, pending)
+
+    assert task_owners == {"child-task": "started-tool"}
+    assert pending == {"started-tool"}
 
 
 # ── AskUserQuestion response parsing ─────────────────────────────────────

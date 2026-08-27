@@ -367,7 +367,7 @@ def _prepare_workspace() -> None:
     # 4. Merge hooks/hooks.json entries into .claude/settings.json
     _merge_plugin_hooks_into_claude_settings()
 
-    # 5. Apply runtime sandbox overrides (bubblewrap fallback)
+    # 5. Apply runtime sandbox requirements for the selected isolation mode
     _apply_runtime_claude_settings_overrides()
 
     # 5b. Deny every known secret env var to sandboxed Bash so the LLM can
@@ -606,17 +606,7 @@ def _merge_plugin_hooks_into_claude_settings() -> None:
 
 
 def _apply_runtime_claude_settings_overrides() -> None:
-    """Disable Claude's Linux sandbox when the container cannot use bubblewrap.
-
-    The runtime already executes inside an ephemeral container with repo-scoped
-    mounts and platform-level permission gating. Claude Code's Linux sandbox
-    relies on user-namespace support that is not available in this deployment,
-    so fail open to unsandboxed commands inside the container instead of hard-
-    failing every Bash invocation with a bubblewrap namespace error.
-    """
-    if os.environ.get("CLAUDE_SANDBOX_FAIL_OPEN", "1").lower() not in {"1", "true", "yes", "on"}:
-        return
-
+    """Require Bubblewrap or an explicitly selected weaker nested sandbox."""
     settings = _load_claude_settings()
     sandbox = settings.get("sandbox")
     if not isinstance(sandbox, dict) or not sandbox.get("enabled"):
@@ -624,6 +614,8 @@ def _apply_runtime_claude_settings_overrides() -> None:
 
     if os.environ.get("CLAUDE_SANDBOX_ENABLE_WEAKER_NESTED", "").lower() in {"1", "true", "yes", "on"}:
         sandbox["enableWeakerNestedSandbox"] = True
+        sandbox["failIfUnavailable"] = True
+        sandbox["allowUnsandboxedCommands"] = False
         filesystem = sandbox.get("filesystem")
         if not isinstance(filesystem, dict):
             filesystem = {}
@@ -642,31 +634,7 @@ def _apply_runtime_claude_settings_overrides() -> None:
 
     if _bubblewrap_supported():
         return
-
-    changed = False
-    if sandbox.get("enabled") is not False:
-        sandbox["enabled"] = False
-        changed = True
-    if sandbox.get("failIfUnavailable") is not False:
-        sandbox["failIfUnavailable"] = False
-        changed = True
-    if sandbox.get("autoAllowBashIfSandboxed") is not False:
-        sandbox["autoAllowBashIfSandboxed"] = False
-        changed = True
-    if sandbox.get("allowUnsandboxedCommands") is not True:
-        sandbox["allowUnsandboxedCommands"] = True
-        changed = True
-
-    if not changed:
-        return
-
-    CLAUDE_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CLAUDE_SETTINGS_PATH.write_text(json.dumps(settings, indent=2) + "\n")
-    logger.info(
-        "Disabled Claude sandbox in %s because bubblewrap namespaces are unavailable; "
-        "using Docker isolation and unsandboxed command fallback",
-        CLAUDE_SETTINGS_PATH,
-    )
+    raise RuntimeError("Claude sandbox requires Bubblewrap support in this runtime isolation mode")
 
 
 def _collect_secret_env_keys() -> set[str]:
@@ -1003,6 +971,45 @@ def _estimated_turns(progress_state: dict[str, Any]) -> int:
     return int(progress_state.get("turns") or 0)
 
 
+@contextlib.contextmanager
+def _track_human_wait(progress_state: dict[str, Any], *, kind: str):
+    wait_id = uuid.uuid4().hex
+    active_waits = progress_state.setdefault("active_human_waits", {})
+    active_waits[wait_id] = {"kind": kind, "started_at": time.monotonic()}
+    try:
+        yield
+    finally:
+        active_waits.pop(wait_id, None)
+        if not active_waits:
+            progress_state.pop("active_human_waits", None)
+
+
+def _has_active_human_wait(progress_state: dict[str, Any]) -> bool:
+    return bool(progress_state.get("active_human_waits"))
+
+
+async def _next_query_event(
+    output_queue: asyncio.Queue[tuple[str, Any]],
+    query_task: asyncio.Task,
+    progress_state: dict[str, Any],
+    *,
+    first_message_received: bool,
+) -> tuple[str, Any]:
+    while True:
+        try:
+            return await asyncio.wait_for(output_queue.get(), timeout=QUERY_PROGRESS_TIMEOUT_SEC)
+        except TimeoutError as exc:
+            if _has_active_human_wait(progress_state):
+                logger.info("Claude SDK progress watchdog suspended while awaiting human input")
+                continue
+            query_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await query_task
+            phase = "before_first_message" if not first_message_received else "between_messages"
+            timeout_error = TimeoutError(f"No Claude SDK messages for {QUERY_PROGRESS_TIMEOUT_SEC:.0f}s ({phase})")
+            raise timeout_error from exc
+
+
 def _annotate_workflow_usage(data: dict[str, Any], token_totals: dict[str, int]) -> dict[str, Any]:
     task_id = str(data.get("task_id") or "").strip()
     usage = data.get("usage")
@@ -1276,12 +1283,13 @@ def build_pre_tool_use_hook(
             return {"continue_": True}
 
         tool_input = (input_data or {}).get("tool_input") or {}
-        result = await _handle_ask_user_question(
-            tool_input,
-            secret_env,
-            progress_state,
-            append_transcript_messages,
-        )
+        with _track_human_wait(progress_state, kind="user_input"):
+            result = await _handle_ask_user_question(
+                tool_input,
+                secret_env,
+                progress_state,
+                append_transcript_messages,
+            )
         if isinstance(result, PermissionResultAllow):
             return {
                 "hookSpecificOutput": {
@@ -1354,7 +1362,8 @@ def build_can_use_tool(
             },
         )
 
-        approved, actor = await _request_operator_approval(tool_name, tool_input, secret_env)
+        with _track_human_wait(progress_state, kind="approval"):
+            approved, actor = await _request_operator_approval(tool_name, tool_input, secret_env)
         denial_error = (
             f"Approval not granted for {tool_name}. If you can continue without this tool, do so. "
             "Otherwise, synthesize the findings you already have for this session, explain what remains unverified, "
@@ -1460,6 +1469,19 @@ def _resumed_subagent_recipient(
     return None
 
 
+def _set_pending_subagent_owner(
+    task_id: str,
+    tool_use_id: str,
+    task_owners: dict[str, str],
+    pending_tool_use_ids: set[str],
+) -> None:
+    previous_tool_use_id = task_owners.get(task_id)
+    if previous_tool_use_id and previous_tool_use_id != tool_use_id:
+        pending_tool_use_ids.discard(previous_tool_use_id)
+    task_owners[task_id] = tool_use_id
+    pending_tool_use_ids.add(tool_use_id)
+
+
 def _humanize_tool_name(tool_name: str) -> str:
     """Convert internal tool names into a user-facing label."""
     raw_name = tool_name.strip()
@@ -1533,8 +1555,8 @@ def _summarize_denied_tool_input(tool_input: dict[str, Any]) -> str:
     return ", ".join(parts)
 
 
-def _approval_denied_fallback_text(denial: dict[str, Any]) -> str:
-    """Build a generic user-facing fallback result when approval denial ends the flow."""
+def _approval_denied_result_text(denial: dict[str, Any]) -> str:
+    """Build the user-facing result when approval denial ends the flow."""
     tool_name = str(denial.get("tool_name") or "").strip()
     tool_input = denial.get("tool_input") if isinstance(denial.get("tool_input"), dict) else {}
 
@@ -1703,13 +1725,14 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
     prompt_queue: asyncio.Queue[dict[str, Any] | None]
     prompt_stream_closed = False
     # Newer Claude CLI (>=2.1) launches subagents asynchronously: the parent
-    # emits its ResultMessage *before* the subagent runs. If we close stdin at
-    # that first result, the control stream dies and every subagent tool call
-    # fails with "Tool permission request failed: Error: Stream closed" because
-    # can_use_tool responses travel back over the same stdin channel. Track
-    # in-flight async subagents so we only close stdin once none remain.
+    # emits interim ResultMessages while subagents run. Closing stdin on one of
+    # those results kills the permission-response channel; accepting one as the
+    # task result posts progress prose as success. Require a coordinator result
+    # emitted after every async subagent has reached a terminal notification.
     pending_async_subagent_tool_ids: set[str] = set()
     async_subagent_task_ids: dict[str, str] = {}
+    had_async_subagents = False
+    coordinator_result_after_subagents = False
     observed_turns = 0
     query_started_at = time.monotonic()
 
@@ -1785,7 +1808,6 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
             "approval_patterns": approval_patterns,
             "deny_patterns": deny_patterns,
             "thinking_mode": thinking_mode,
-            "legacy_max_thinking_tokens": os.environ.get("MAX_THINKING_TOKENS", ""),
         },
     )
 
@@ -1821,25 +1843,22 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
 
     try:
         while True:
-            try:
-                event_type, payload = await asyncio.wait_for(
-                    output_queue.get(),
-                    timeout=QUERY_PROGRESS_TIMEOUT_SEC,
-                )
-            except TimeoutError as exc:
-                query_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await query_task
-                phase = "before_first_message" if not first_message_received else "between_messages"
-                timeout_error = TimeoutError(f"No Claude SDK messages for {QUERY_PROGRESS_TIMEOUT_SEC:.0f}s ({phase})")
-                raise timeout_error from exc
+            event_type, payload = await _next_query_event(
+                output_queue,
+                query_task,
+                progress_state,
+                first_message_received=first_message_received,
+            )
 
             if event_type == "done":
+                if had_async_subagents and not coordinator_result_after_subagents:
+                    raise RuntimeError("Async subagent session ended before coordinator terminal result")
                 break
             if event_type == "error":
                 raise payload
 
             message = payload
+            finish_after_message = False
             if not first_message_received:
                 first_message_received = True
 
@@ -1870,6 +1889,7 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
                         tool_use_id = str(block.id)
                         tool_names_by_use_id[tool_use_id] = tool_name
                         if tool_name in {"Agent", "Task"}:
+                            had_async_subagents = True
                             pending_async_subagent_tool_ids.add(tool_use_id)
                         elif resumed_task_id := _resumed_subagent_recipient(
                             tool_name,
@@ -1908,7 +1928,7 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
             elif hasattr(message, "result") and hasattr(message, "usage"):
                 # ResultMessage — final message with aggregates
                 msg_record["type"] = "result"
-                final_text = getattr(message, "result", "") or ""
+                result_text = getattr(message, "result", "") or ""
                 num_turns = getattr(message, "num_turns", 0)
                 total_cost_usd = getattr(message, "total_cost_usd", 0.0) or 0.0
                 usage = getattr(message, "usage", None)
@@ -1921,17 +1941,19 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
                         "total_tokens": int((total_input_tokens or 0) + (total_output_tokens or 0)),
                     }
                 model_usage = getattr(message, "modelUsage", {}) or {}
-                msg_record["result_preview"] = final_text[:2000]
+                msg_record["result_preview"] = result_text[:2000]
                 msg_record["num_turns"] = num_turns
                 msg_record["total_cost_usd"] = total_cost_usd
-                progress_state["last_result_text"] = final_text
-                # Once Claude has produced a final result AND no async
-                # subagents are still in flight, close the prompt stream so the
-                # SDK can end stdin and let the CLI terminate cleanly instead of
-                # hanging in heartbeat-only state. If a subagent is still
-                # running, keep stdin open so its tool permission requests can
-                # be answered over the control stream.
-                await close_prompt_stream_when_idle()
+                if had_async_subagents and pending_async_subagent_tool_ids:
+                    progress_state["last_interim_result_text"] = result_text
+                else:
+                    final_text = result_text
+                    progress_state["last_result_text"] = final_text
+                if had_async_subagents and not pending_async_subagent_tool_ids:
+                    coordinator_result_after_subagents = True
+                    finish_after_message = True
+                elif not had_async_subagents:
+                    await close_prompt_stream_when_idle()
 
             elif hasattr(message, "subtype") and hasattr(message, "data"):
                 # SystemMessage
@@ -1944,12 +1966,18 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
                 # Track async subagent lifecycle so we don't close stdin while a
                 # subagent still needs to answer tool permission requests.
                 if message.subtype == "task_started":
+                    had_async_subagents = True
                     tool_use_id = str(safe_data.get("tool_use_id") or "") if isinstance(safe_data, dict) else ""
                     task_id = str(safe_data.get("task_id") or "") if isinstance(safe_data, dict) else ""
-                    if tool_use_id:
-                        pending_async_subagent_tool_ids.add(tool_use_id)
                     if tool_use_id and task_id:
-                        async_subagent_task_ids[task_id] = tool_use_id
+                        _set_pending_subagent_owner(
+                            task_id,
+                            tool_use_id,
+                            async_subagent_task_ids,
+                            pending_async_subagent_tool_ids,
+                        )
+                    elif tool_use_id:
+                        pending_async_subagent_tool_ids.add(tool_use_id)
                 elif message.subtype == "task_updated":
                     # task_updated precedes task_notification and can describe an
                     # intermediate completion before a specialist's usable finding
@@ -1963,7 +1991,6 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
                     terminal_status = str(safe_data.get("status") or "").lower()
                     if tool_use_id and terminal_status in {"completed", "failed", "cancelled", "canceled"}:
                         pending_async_subagent_tool_ids.discard(tool_use_id)
-                        await close_prompt_stream_when_idle()
 
             else:
                 # Unknown message type — log it
@@ -1979,6 +2006,9 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
             progress_state["total_messages"] = len(conversation)
             await flush_conversation_batches()
 
+            if finish_after_message:
+                break
+
             if (
                 msg_record.get("type") == "tool_result"
                 and tool_names_by_use_id.get(str(msg_record.get("tool_use_id") or "")) == "Agent"
@@ -1987,7 +2017,6 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
                 preview = str(msg_record.get("content_preview") or "")
                 if msg_record.get("is_error"):
                     pending_async_subagent_tool_ids.discard(tool_use_id)
-                    await close_prompt_stream_when_idle()
                 if tool_use_id and tool_use_id not in empty_subagent_retries and _is_subagent_no_output_result(preview):
                     empty_subagent_retries.add(tool_use_id)
                     retry_text = _subagent_no_output_retry_text()
@@ -2041,7 +2070,7 @@ async def run_agent_session(secret_env: dict[str, str], progress_state: dict[str
 
     approval_denied = progress_state.get("approval_denied")
     if not final_text and isinstance(approval_denied, dict):
-        final_text = _approval_denied_fallback_text(approval_denied)
+        final_text = _approval_denied_result_text(approval_denied)
 
     await report_event(
         "session_phase",

@@ -102,8 +102,81 @@ def test_discover_message_routes_maps_channel_to_workflow(fixture_workflows_dir:
             workflow="platform-test",
             channel="platform-test-channel",
             trigger_words=("@agent",),
+            coalesce_window_sec=60,
         )
     ]
+
+
+def test_discover_message_routes_adds_structured_rule(tmp_path: Path) -> None:
+    workflow_dir = tmp_path / "online-alerts"
+    workflow_dir.mkdir()
+    (workflow_dir / "agent.yaml").write_text(
+        """name: online-alerts
+description: Test alerts
+messaging:
+  rules:
+    - id: production-alarm
+      provider: mattermost
+      channels: [online-monitoring]
+      priority: 100
+      match:
+        type: regex
+        pattern: 'production-.*?Alarm'
+        scope: full_body
+      trusted_senders:
+        user_ids: [user-1]
+        webhook_ids: [webhook-1]
+        webhook_names: [AWS CloudWatch]
+      allow_bot: true
+      root_posts_only: true
+      preserve_full_body: true
+      constraints:
+        environments: [production]
+        accounts: ['123456789012']
+"""
+    )
+
+    routes = discover_message_routes(tmp_path)
+
+    assert routes == [
+        MessageRoute(
+            workflow="online-alerts",
+            channel="online-monitoring",
+            rule_id="production-alarm",
+            provider="mattermost",
+            priority=100,
+            match_type="regex",
+            pattern="production-.*?Alarm",
+            trusted_user_ids=("user-1",),
+            trusted_webhook_ids=("webhook-1",),
+            trusted_webhook_names=("AWS CloudWatch",),
+            allow_bot=True,
+            root_posts_only=True,
+            preserve_full_body=True,
+            allowed_accounts=("123456789012",),
+            allowed_environments=("production",),
+        ),
+    ]
+
+
+def test_discover_message_routes_rejects_unsafe_regex(tmp_path: Path) -> None:
+    workflow_dir = tmp_path / "unsafe-alerts"
+    workflow_dir.mkdir()
+    (workflow_dir / "agent.yaml").write_text(
+        """name: unsafe-alerts
+description: Unsafe test
+messaging:
+  channels: [alerts]
+  rules:
+    - id: unsafe
+      match:
+        type: regex
+        pattern: '(a+)+$'
+"""
+    )
+
+    with pytest.raises(ValueError, match="unsupported regex syntax"):
+        discover_message_routes(tmp_path)
 
 
 def test_discover_workflow_packages_accepts_repo_root_with_workflows(fixture_repo_root: Path) -> None:

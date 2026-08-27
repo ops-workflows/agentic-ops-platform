@@ -6,9 +6,9 @@ export function ExpandableMeta({
   value: string;
 }) {
   return (
-    <div
-      className="group/meta relative min-h-[62px] rounded-btn border border-ops-border-subtle bg-ops-bg px-3 py-2.5 outline-none focus:ring-1 focus:ring-[var(--color-info)]"
-      tabIndex={0}
+    <button
+      type="button"
+      className="group/meta relative min-h-[62px] w-full rounded-btn border border-ops-border-subtle bg-ops-bg px-3 py-2.5 text-left outline-none focus:ring-1 focus:ring-[var(--color-info)]"
     >
       <div className="text-[10px] uppercase tracking-[0.12em] text-[var(--color-text-tertiary)]">
         {label}
@@ -25,6 +25,6 @@ export function ExpandableMeta({
         </div>
         <div className="mt-1">{value}</div>
       </div>
-    </div>
+    </button>
   );
 }

@@ -198,6 +198,81 @@
             "minLength": 1
           },
           "description": "Message prefixes that start this workflow in its configured channels"
+        },
+        "rules": {
+          "type": "array",
+          "maxItems": 50,
+          "description": "Structured, deterministic message routing rules",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "match"],
+            "properties": {
+              "id": {"type": "string", "minLength": 1, "maxLength": 100},
+              "enabled": {"type": "boolean", "default": true},
+              "provider": {"type": "string", "enum": ["mattermost", "slack"]},
+              "channels": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {"type": "string", "minLength": 1}
+              },
+              "priority": {"type": "integer", "minimum": -1000, "maximum": 1000, "default": 0},
+              "match": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["type", "pattern"],
+                "properties": {
+                  "type": {"type": "string", "enum": ["prefix", "regex"]},
+                  "pattern": {"type": "string", "minLength": 1, "maxLength": 256},
+                  "scope": {"type": "string", "enum": ["full_body"], "default": "full_body"}
+                }
+              },
+              "trusted_senders": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "user_ids": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": {"type": "string", "minLength": 1}
+                  },
+                  "webhook_ids": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": {"type": "string", "minLength": 1}
+                  },
+                  "webhook_names": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": {"type": "string", "minLength": 1}
+                  }
+                }
+              },
+              "allow_bot": {"type": "boolean", "default": false},
+              "root_posts_only": {"type": "boolean", "default": false},
+              "preserve_full_body": {"type": "boolean", "default": false},
+              "constraints": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "environments": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "enum": ["production", "uat", "development", "staging", "test"]
+                    }
+                  },
+                  "accounts": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": {"type": "string", "pattern": "^\\d{12}$"}
+                  }
+                }
+              }
+            }
+          }
         }
       }
     }

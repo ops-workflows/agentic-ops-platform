@@ -267,16 +267,15 @@ async def test_connector_task_without_message_thread_posts_top_level(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("provider", "channel_id", "thread_id"),
+    ("provider", "channel_id"),
     [
-        ("mattermost", "mattermost-channel", "mattermost-root"),
-        ("slack", "C123", "1710000000.000100"),
+        ("mattermost", "mattermost-channel"),
+        ("slack", "C123"),
     ],
 )
 async def test_keyword_message_creates_threaded_task_and_posts_final_response(
     provider,
     channel_id,
-    thread_id,
     require_runtime,
     patched_settings,
     mock_llm,
@@ -285,25 +284,52 @@ async def test_keyword_message_creates_threaded_task_and_posts_final_response(
     spawn_and_wait,
     _fake_services,
 ) -> None:
-    """A provider message matching a workflow keyword creates a task and receives threaded updates."""
+    """Both providers carry the latest ten thread messages through a runtime task."""
     from gateway.message_ingress import GatewayMessageIngress
+    from gateway.plugin_dir import discover_all_message_routes
     from shared.lib.message_ingress import InboundMessage
 
     patched_settings.message_bus.provider = provider
     fake_mattermost.reset()
     final_marker = f"KEYWORD_{provider.upper()}_FINAL"
+    request_text = "investigate the inbound event"
+    message_ids = [
+        f"mattermost-{index:06d}" if provider == "mattermost" else f"1710000000.{index:06d}" for index in range(1, 13)
+    ]
+    thread_id = message_ids[0]
+    message_id = message_ids[-1]
+    thread_texts = [f"Thread evidence message {index:02d}" for index in range(1, 12)]
+    for index, post_id in enumerate(message_ids, start=1):
+        is_request = index == len(message_ids)
+        fake_mattermost.seed_post(
+            post_id=post_id,
+            channel_id=channel_id,
+            root_id="" if index == 1 else thread_id,
+            message=f"@agent {request_text}" if is_request else thread_texts[index - 1],
+            user_id="operator-user" if is_request else f"responder-{index}",
+            username="operator" if is_request else f"responder-{index}",
+        )
+    retained_texts = [*thread_texts[2:], request_text]
     mock_llm.set_scenario(
         [
-            Turn(respond=[{"type": "text", "text": final_marker}], stop_reason="end_turn"),
+            Turn(
+                expect={
+                    "markers_present": retained_texts,
+                    "markers_absent": thread_texts[:2],
+                },
+                respond=[{"type": "text", "text": final_marker}],
+                stop_reason="end_turn",
+            ),
         ]
     )
 
     ingress = GatewayMessageIngress()
+    ingress._routes = discover_all_message_routes()
     try:
         await ingress.handle_event(
             InboundMessage(
                 provider=provider,
-                message_id=f"{provider}-message",
+                message_id=message_id,
                 thread_id=thread_id,
                 channel_id=channel_id,
                 channel_name="platform-test-channel",
@@ -311,18 +337,28 @@ async def test_keyword_message_creates_threaded_task_and_posts_final_response(
                 team_name="test-team",
                 user_id="operator-user",
                 username="operator",
-                text="@agent investigate the inbound event",
+                text=f"@agent {request_text}",
             )
         )
     finally:
         await ingress.stop()
 
     task = (
-        await db_session.execute(select(TaskModel).where(TaskModel.prompt == "investigate the inbound event"))
+        await db_session.execute(
+            select(TaskModel).where(
+                TaskModel.channel == provider,
+                TaskModel.message_thread == thread_id,
+            )
+        )
     ).scalar_one()
     assert task.channel == provider
     assert task.message_channel == "platform-test-channel"
     assert task.message_thread == thread_id
+    assert all(text not in task.prompt for text in thread_texts[:2])
+    assert [task.prompt.index(text) for text in retained_texts] == sorted(
+        task.prompt.index(text) for text in retained_texts
+    )
+    assert task.task_metadata["thread_context_count"] == 10
 
     exit_code, logs = await spawn_and_wait(task, timeout_sec=180)
     assert exit_code == 0, f"Container exited {exit_code}.\nLogs:\n{logs}"

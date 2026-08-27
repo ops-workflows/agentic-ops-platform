@@ -9,7 +9,7 @@ the same way shared `hooks/` are.
 ## Precedence
 
 Skill assembly follows the same shadow rule as the rest of a bundle (see
-[Bundle assembly](../../docs/workflow-authoring.md#bundle-assembly)):
+[Bundle assembly](../../../docs/workflow-authoring.md#bundle-assembly)):
 
 1. **Platform core** — `agentic-ops-platform/skills/*`.
 2. **This repo's shared skills** — `skills/*` here.

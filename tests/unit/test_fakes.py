@@ -51,6 +51,27 @@ def test_fake_message_provider_supports_slack_post_and_update(background_app) ->
     assert fake.all_posts()[0].message == "resolved"
 
 
+def test_fake_message_provider_returns_mattermost_and_slack_threads(background_app) -> None:
+    fake = build_fake_mattermost()
+    fake.seed_post(post_id="root", channel_id="C123", message="root message", user_id="user-1")
+    fake.seed_post(
+        post_id="reply",
+        channel_id="C123",
+        root_id="root",
+        message="reply message",
+        user_id="user-2",
+    )
+    server = background_app(fake.app)
+
+    with httpx.Client(base_url=server.base_url, timeout=5) as client:
+        mattermost = client.get("/api/v4/posts/root/thread").json()
+        slack = client.post("/conversations.replies", json={"channel": "C123", "ts": "root"}).json()
+
+    assert mattermost["order"] == ["root", "reply"]
+    assert mattermost["posts"]["reply"]["message"] == "reply message"
+    assert [message["text"] for message in slack["messages"]] == ["root message", "reply message"]
+
+
 def test_fake_hindsight_records_retain_and_scripted_recall(background_app) -> None:
     fake = build_fake_hindsight()
     server = background_app(fake.app)

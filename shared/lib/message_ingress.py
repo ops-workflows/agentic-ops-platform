@@ -13,6 +13,8 @@ from urllib.parse import urlparse, urlunparse
 import httpx
 from websockets.asyncio.client import connect
 
+from shared.lib.mattermost_api import normalize_post_text
+
 logger = logging.getLogger(__name__)
 
 
@@ -28,7 +30,12 @@ class InboundMessage:
     user_id: str
     username: str
     text: str
+    created_at_ms: int = 0
     is_bot: bool = False
+    is_webhook: bool = False
+    webhook_id: str = ""
+    webhook_name: str = ""
+    text_truncated: bool = False
 
 
 @dataclass(frozen=True)
@@ -45,6 +52,12 @@ class InteractiveAction:
 
 MessageEvent = InboundMessage | InteractiveAction
 MessageEventHandler = Callable[[MessageEvent], Awaitable[None]]
+
+
+def _is_truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes"}
 
 
 def parse_mattermost_websocket_event(payload: dict[str, Any]) -> InboundMessage | None:
@@ -73,6 +86,8 @@ def parse_mattermost_websocket_event(payload: dict[str, Any]) -> InboundMessage 
     message_id = str(post.get("id") or "")
     if not message_id:
         return None
+    props = post.get("props") if isinstance(post.get("props"), dict) else {}
+    text, text_truncated = normalize_post_text(post)
     return InboundMessage(
         provider="mattermost",
         message_id=message_id,
@@ -83,7 +98,13 @@ def parse_mattermost_websocket_event(payload: dict[str, Any]) -> InboundMessage 
         team_name=str(data.get("team_name") or ""),
         user_id=str(post.get("user_id") or broadcast.get("user_id") or ""),
         username=str(data.get("sender_name") or ""),
-        text=str(post.get("message") or "").strip(),
+        text=text,
+        created_at_ms=int(post.get("create_at") or 0),
+        is_bot=_is_truthy(props.get("from_bot")),
+        is_webhook=_is_truthy(props.get("from_webhook")),
+        webhook_id=str(props.get("webhook_id") or "").strip(),
+        webhook_name=str(props.get("webhook_display_name") or props.get("override_username") or "").strip(),
+        text_truncated=text_truncated,
     )
 
 

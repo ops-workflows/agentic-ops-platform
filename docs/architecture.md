@@ -80,7 +80,8 @@ Covered in their own docs: [MCP servers](mcps.md) and [Connectors](connectors.md
 flowchart LR
     subgraph Ingestion
         C[Connector] -->|create_task| Q[(task_queue.tasks)]
-      W[Gateway message ingress] -->|create_task| Q
+            P[Mattermost WebSocket / Slack Socket Mode] --> W[Gateway message ingress]
+            W -->|route, hydrate reply thread, create_task| Q
         S[Scheduler] -->|cron fire| Q
     end
 
@@ -92,6 +93,7 @@ flowchart LR
     RT -->|tool calls| MCP[MCP servers]
     RT -->|human I/O, approvals| MB[Message bus]
     RT -->|events, approval requests| GW[Gateway]
+   GW -->|REST / Web API posts and thread reads| P
     GW -->|approve/reject| RT
     RT -->|session_complete| GW
     GW --> Q

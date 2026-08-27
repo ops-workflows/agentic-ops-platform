@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentic-ops.fullname" . }}-knowledge-indexer
+  labels:
+    app.kubernetes.io/component: knowledge-indexer
+spec:
+  replicas: {{ .Values.knowledgeIndexer.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: knowledge-indexer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: knowledge-indexer
+    spec:
+      {{- include "agentic-ops.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "agentic-ops.serviceAccountName" . }}
+      containers:
+        - name: knowledge-indexer
+          image: {{ .Values.images.knowledgeIndexer.repository }}:{{ .Values.images.knowledgeIndexer.tag }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          env:
+            {{- include "agentic-ops.commonEnv" . | nindent 12 }}
+            - name: KNOWLEDGE_SOURCE_OBJECT_STORE_BUCKET
+              value: {{ required "knowledgeSources.objectStoreBucket is required" .Values.knowledgeSources.objectStoreBucket | quote }}
+            - name: KNOWLEDGE_SOURCE_INDEXER_CACHE_ROOT
+              value: {{ .Values.knowledgeIndexer.cacheRoot | quote }}
+            - name: KNOWLEDGE_SOURCE_INDEXER_POLL_INTERVAL_SEC
+              value: {{ .Values.knowledgeIndexer.pollIntervalSec | quote }}
+            - name: KNOWLEDGE_SOURCE_STALE_RUN_SEC
+              value: {{ .Values.knowledgeIndexer.staleRunSec | quote }}
+          {{- if .Values.bootstrap.existingSecret }}
+          envFrom:
+            {{- include "agentic-ops.bootstrapEnvFrom" . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            {{- include "agentic-ops.commonVolumeMounts" . | nindent 12 }}
+            - name: knowledge-indexer-cache
+              mountPath: {{ .Values.knowledgeIndexer.cacheRoot }}
+      volumes:
+        {{- include "agentic-ops.commonVolumes" . | nindent 8 }}
+        - name: knowledge-indexer-cache
+          emptyDir: {}

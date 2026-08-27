@@ -1,6 +1,4 @@
-"""Unit tests for workflow-repo PAT-authenticated URL construction and the
-bundle/platform compatibility policy.
-"""
+"""Unit tests for workflow-repo authentication and compatibility policy."""
 
 from __future__ import annotations
 
@@ -9,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from shared.lib.workflow_paths import _authenticated_repo_url
+from shared.lib.github_app import github_git_auth_environment
 from shared.lib.workflow_repo_sync import (
     COMPATIBILITY_ERROR,
     COMPATIBILITY_OK,
@@ -20,24 +18,13 @@ from shared.lib.workflow_repo_sync import (
 pytestmark = pytest.mark.unit
 
 
-def test_authenticated_repo_url_injects_token_for_https():
-    url = _authenticated_repo_url("https://github.com/acme/workflows.git", "ghp_secrettoken")
-    assert url == "https://ghp_secrettoken@github.com/acme/workflows.git"
-
-
-def test_authenticated_repo_url_returns_unchanged_without_pat():
-    url = "https://github.com/acme/workflows.git"
-    assert _authenticated_repo_url(url, "") == url
-
-
-def test_authenticated_repo_url_does_not_rewrite_ssh_urls():
-    url = "git@github.com:acme/workflows.git"
-    assert _authenticated_repo_url(url, "ghp_secrettoken") == url
-
-
-def test_authenticated_repo_url_does_not_overwrite_existing_credentials():
-    url = "https://existing-user@github.com/acme/workflows.git"
-    assert _authenticated_repo_url(url, "ghp_secrettoken") == url
+def test_github_git_auth_uses_ephemeral_askpass_environment():
+    with github_git_auth_environment("installation-token") as environment:
+        script_path = Path(environment["GIT_ASKPASS"])
+        assert script_path.exists()
+        assert environment["GIT_TERMINAL_PROMPT"] == "0"
+        assert environment["GITHUB_APP_INSTALLATION_TOKEN"] == "installation-token"
+    assert not script_path.exists()
 
 
 # ── check_bundle_compatibility ───────────────────────────────────────

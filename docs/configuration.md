@@ -6,8 +6,8 @@ know how to fetch the repo).
 
 | Layer | Owner | Committed? | Holds |
 | --- | --- | --- | --- |
-| 1. Bootstrap / infra | Operator | No (generated) | Workflow-repo pointer + PAT, `AGE_IDENTITY`, one `LLM_API_KEY`, and direct-container secrets (Postgres/object storage). |
-| 2. Instance config | Workflow repo | Yes (secrets age-encrypted) | `platform-config.yaml`: message bus, MCPs, connectors, memory banks, model profiles, workflow secrets. |
+| 1. Bootstrap / infra | Operator | No (generated) | Workflow-repo pointer, `AGE_IDENTITY`, one `LLM_API_KEY`, and direct-container secrets (Postgres/object storage). A one-time PAT may be entered for the initial clone but is never written to an artifact. |
+| 2. Instance config | Workflow repo | Yes (secrets age-encrypted) | `platform-config.yaml`: GitHub App connections, message bus, MCPs, connectors, memory banks, model profiles, workflow secrets. |
 | 3. Workflow packages | Workflow repo | Yes | `workflows/`, shared `skills/`/`hooks/`, custom `mcps/`/`connectors/`. |
 
 Boot sequence: read layer 1 → clone/sync the workflow repo at the pinned ref →
@@ -21,7 +21,7 @@ These are environment variables read by `shared/lib/config.py`'s `Settings`
 class. Env vars always take precedence; unset ones may be overlaid from the
 workflow repo's `platform-config.yaml` `config:` section once it has been
 fetched (see [Loading order](#loading-order) below) — except
-`WORKFLOW_REPO_URL`/`REF`/`PAT`, which are bootstrap-only and never read from
+`WORKFLOW_REPO_URL`/`REF`, which are bootstrap-only and never read from
 repo-owned config.
 
 ### Workflow repository
@@ -30,18 +30,39 @@ repo-owned config.
 | --- | --- | --- |
 | `WORKFLOW_REPO_URL` | `""` | Canonical Git URL of the workflow repo. A remote source syncs it; a local source uses it for GitHub version lookup and reflection PRs while continuing to use its mounted checkout. |
 | `WORKFLOW_REPO_REF` | `""` | Git ref (tag/SHA) to sync; the bootstrap default until an operator pins a different ref from the UI. |
-| `WORKFLOW_REPO_PAT` | `""` | PAT used to authenticate clone/fetch/version lookup for a private repo and to create reflection PRs in that same repo. Bootstrap-only. |
 | `WORKFLOW_REPO_PATHS` | `""` | `os.pathsep`-separated list of mounted workflow roots (local-path source mode). Each entry can be a single workflow dir, a directory of workflows, or a repo root containing `workflows/`. |
 | `WORKFLOW_REPO_LOCAL_PATH` | `/workspace/workflows` | Container-side path the workflow repo is synced/mounted to. |
 | `REPO_PATH` | `""` | Path to a checked-out/mounted workflow repo root. |
 | `HOST_REPO_ROOT` | `""` | Host-side bind-mount path used by the Compose convenience override. |
+
+### GitHub App connections
+
+Runtime GitHub access is app-only. Define named installations under
+`github.connections` in `platform-config.yaml`. Each connection contains
+`web_base_url`, `api_base_url`, `app_id`, `installation_id`, and a
+`private_key_secret` reference into the age-encrypted `secrets` mapping. Set
+`github.workflow_repo_connection` to the connection used for workflow sync,
+version lookup, and reflection PRs.
+
+GitHub.com and each GHES instance require separate GitHub Apps and keys. A
+connection represents one App installation rather than only a domain, because
+one host may contain multiple installations with different repository access.
+Knowledge Sources select a connection by setting `credential_ref` to its exact
+name, such as `github-public` or `github-enterprise`; a public source can leave it
+empty. GitHub MCP repository aliases use the same connection names.
+
+Grant each App only the repository permissions required by its installation:
+`Contents: read and write` for sync plus reflection branches/commits,
+`Issues: read and write` for GitHub MCP issue operations, `Pull requests: read
+and write` for reflection PRs, and the automatically granted `Metadata: read`.
+Do not grant `Workflows` unless the allowed reflection paths are intentionally
+expanded to `.github/workflows`.
 
 ### Platform config file
 
 | Env var | Default | Purpose |
 | --- | --- | --- |
 | `PLATFORM_CONFIG_FILE` | `/app/platform-config.yaml` | Path to the instance's `platform-config.yaml`, read after the workflow repo is fetched. |
-| `PLATFORM_SECRETS_FILE` | `""` | Deprecated alias for `PLATFORM_CONFIG_FILE`. |
 
 ### Database
 
@@ -184,16 +205,19 @@ message_bus:
 ```
 
 Mattermost needs a bot token, API URL, and an optional `team_name` when channel
-names are ambiguous. Its interactive approval buttons call
+names are ambiguous. New posts arrive through `/api/v4/websocket`; outbound
+acknowledgements, results, questions, approval cards, and card updates use the
+Mattermost REST API. Its interactive approval buttons call
 `GATEWAY_PUBLIC_BASE_URL/webhooks/message/actions/approval`; configure an
 `action_callback_secret` for that internal callback. Remove any old Mattermost
 outgoing-webhook integration.
 
-Slack needs a bot token with `chat:write`, `channels:read`, and `groups:read`
-scopes (plus access to each configured channel), and a Socket Mode app token.
-Enable message events and interactive components in the Slack app. Slack does
-not use `action_callback_secret`: Socket Mode delivers the authenticated
-interactive action to the Gateway.
+Slack needs a bot token with `chat:write`, `channels:read`, `groups:read`,
+`channels:history`, and `groups:history` scopes (plus access to each configured
+channel), and a Socket Mode app token. Enable message events and interactive
+components in the Slack app. Message events and approval actions arrive through
+Socket Mode; outbound messages and thread-history reads use the Slack Web API.
+Slack does not use `action_callback_secret`.
 
 Message-bus settings and secrets are never read from `MESSAGE_BUS_*`
 environment variables. The Gateway opens one listener for the configured
@@ -203,6 +227,10 @@ separate message connector service is deployed. Mattermost uses
 approval-action callback. Slack uses Socket Mode for both message events and
 approval actions. The current deployment runs one gateway replica, because a
 second replica would create a second live provider consumer.
+
+Inbound provider messages are event-driven, not polled. The runtime does poll
+Gateway APIs while waiting for an approval or human answer, but the Gateway
+receives the provider event and persists it first.
 
 `message_action_callback_secret` is an internal, independently generated
 gateway secret. Mattermost receives it only inside the approval button context
@@ -224,6 +252,23 @@ configure an explicit channel ID when the channel cannot be listed.
 Matching is case-insensitive and an inbound message must start with a configured
 trigger word. Omit neither `messaging.channels` nor `messaging.trigger_words`:
 without a matching channel and prefix, no task is created.
+
+For a triggering reply inside an existing Mattermost or Slack thread
+(`message_id != thread_id`), routing and sender/alert trust checks run against
+the triggering reply first. Only after it passes does the Gateway read thread
+history through the provider API and build the task prompt from the latest 10
+messages, oldest to newest, including the triggering reply. The trigger prefix
+is removed from that final request. Root posts keep the existing single-message
+behavior. If history retrieval fails or the bot lacks history permission, task
+creation stops rather than running without the required conversation context.
+
+Mattermost hydration uses `GET /api/v4/posts/{root_id}/thread` with the
+triggering post's `fromPost` and `fromCreateAt` cursor values; the bot must be
+able to read the channel and thread. Slack hydration uses
+`conversations.replies`; the bot must be a channel member and have the history
+scope appropriate to that channel type (`channels:history` or
+`groups:history`). Both providers apply the same latest-10 prompt limit and
+record the included count as task metadata under `thread_context_count`.
 
 ### Hindsight memory
 
@@ -359,18 +404,20 @@ secrets:              # age-encrypted platform-wide secrets
 values, decrypted `secrets:` values, and the process environment at load time
 (`shared/lib/platform_secrets.py::expand_env_placeholders`).
 
-`MAX_THINKING_TOKENS` is a provider-specific legacy budget and is not a portable
-reasoning control. Thinking mode, reasoning-history handling, and sampling
-controls such as temperature, top-p, top-k, and presence penalty belong in the
-model gateway or inference deployment when the Anthropic-compatible client does
-not expose them as workflow settings.
+Reasoning-history handling and sampling controls such as temperature, top-p,
+top-k, and presence penalty belong in the model gateway or inference deployment
+when the Anthropic-compatible client does not expose them as workflow settings.
 
 ### Encrypted secrets
 
 Secrets are age-encrypted (X25519, via the `pyrage` library) and stored as
 `ENC[age,<base64-ciphertext>]`. `AGE_PUBLIC_KEY` (safe to commit) encrypts new
 values; `AGE_IDENTITY` (bootstrap-only, never committed) decrypts them at
-container-spawn time. Use `make set-secret` to encrypt and write a new value.
+container-spawn time. Use `make set-platform-secret` for shared values in the
+configured `platform-config.yaml`, or `make set-workflow-secret
+WORKFLOW=<workflow-name>` for values in a workflow's `agent.yaml`. Both commands
+prompt securely for the secret name and value, then run `make sync` to rebuild
+the active workflow release through the running gateway.
 
 Per-workflow secrets follow the same `encrypted: ENC[...]` shape under a
 workflow's own `agent.yaml` `secrets:` block — see

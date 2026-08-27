@@ -39,6 +39,8 @@ async def housekeeping_loop() -> None:
                         "pruned_agent_memory_versions": report.pruned_agent_memory_versions,
                         "pruned_learning_memories": report.pruned_learning_memories,
                         "pruned_background_job_runs": report.pruned_background_job_runs,
+                        "pruned_knowledge_source_versions": report.pruned_knowledge_source_versions,
+                        "pruned_knowledge_source_runs": report.pruned_knowledge_source_runs,
                     },
                     warnings=report.warnings,
                 )
@@ -48,18 +50,23 @@ async def housekeeping_loop() -> None:
                 or report.pruned_agent_memory_versions
                 or report.pruned_learning_memories
                 or report.pruned_background_job_runs
+                or report.pruned_knowledge_source_versions
+                or report.pruned_knowledge_source_runs
             ):
                 logger.info(
                     (
                         "Housekeeping complete: archived=%d deleted=%d "
                         "pruned_memory=%d pruned_learning=%d "
-                        "pruned_job_history=%d warnings=%d"
+                        "pruned_job_history=%d pruned_source_versions=%d "
+                        "pruned_source_runs=%d warnings=%d"
                     ),
                     report.archived_tasks,
                     report.deleted_tasks,
                     report.pruned_agent_memory_versions,
                     report.pruned_learning_memories,
                     report.pruned_background_job_runs,
+                    report.pruned_knowledge_source_versions,
+                    report.pruned_knowledge_source_runs,
                     len(report.warnings),
                 )
         except Exception as exc:

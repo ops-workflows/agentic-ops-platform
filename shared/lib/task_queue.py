@@ -6,6 +6,7 @@ Inspired by OpenClaw's reliable queue pattern.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -86,6 +87,12 @@ async def create_task(
 
     if coalesce_key:
         cutoff = datetime.now(UTC) - timedelta(seconds=coalesce_window_sec)
+        lock_key = int.from_bytes(
+            hashlib.sha256(coalesce_key.encode("utf-8")).digest()[:8],
+            byteorder="big",
+            signed=True,
+        )
+        await session.execute(text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": lock_key})
         existing = await session.execute(
             select(Task)
             .where(
@@ -98,10 +105,24 @@ async def create_task(
         )
         existing_task = existing.scalar_one_or_none()
         if existing_task:
-            # Append to existing task metadata
-            alerts = existing_task.task_metadata.get("coalesced_alerts", [])
+            existing_metadata = dict(existing_task.task_metadata or {})
+            alerts = list(existing_metadata.get("coalesced_alerts", []))
             alerts.append(metadata)
-            existing_task.task_metadata = {**existing_task.task_metadata, "coalesced_alerts": alerts}
+            transitions = list(existing_metadata.get("alert_state_transitions", []))
+            envelope = metadata.get("alert_envelope") if isinstance(metadata, dict) else None
+            if isinstance(envelope, dict):
+                transitions.append(
+                    {
+                        "state": str(envelope.get("state") or "unknown"),
+                        "message_id": str(metadata.get("message_id") or ""),
+                    }
+                )
+            existing_task.task_metadata = {
+                **existing_metadata,
+                "coalesced_alerts": alerts,
+                "alert_occurrence_count": int(existing_metadata.get("alert_occurrence_count", 1)) + 1,
+                "alert_state_transitions": transitions,
+            }
             await session.flush()
             logger.info("Coalesced alert into existing task %s", existing_task.id)
 
