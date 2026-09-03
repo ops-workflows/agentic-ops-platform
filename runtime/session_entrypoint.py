@@ -251,7 +251,19 @@ def _bubblewrap_supported() -> bool:
 
     try:
         probe = subprocess.run(  # noqa: S603 - fixed argv probes local bubblewrap support only.
-            [bwrap_path, "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev", "/bin/true"],
+            [
+                bwrap_path,
+                "--unshare-all",
+                "--die-with-parent",
+                "--ro-bind",
+                "/",
+                "/",
+                "--proc",
+                "/proc",
+                "--dev",
+                "/dev",
+                "/bin/true",
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=5,

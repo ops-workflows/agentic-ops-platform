@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import os
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 # The runtime entrypoint reads these at import time.
 os.environ.setdefault("TASK_ID", "test")
@@ -82,6 +84,28 @@ def test_runtime_sandbox_fails_closed_without_bubblewrap(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="requires Bubblewrap"):
         _apply_runtime_claude_settings_overrides()
+
+
+def test_bubblewrap_support_probe_checks_strict_namespaces(monkeypatch):
+    run = MagicMock(return_value=SimpleNamespace(returncode=0))
+    monkeypatch.setattr(session_entrypoint, "_BWRAP_SUPPORT_PROBE", None)
+    monkeypatch.setattr(session_entrypoint.shutil, "which", lambda _name: "/usr/bin/bwrap")
+    monkeypatch.setattr(session_entrypoint.subprocess, "run", run)
+
+    assert session_entrypoint._bubblewrap_supported() is True
+    assert run.call_args.args[0] == [
+        "/usr/bin/bwrap",
+        "--unshare-all",
+        "--die-with-parent",
+        "--ro-bind",
+        "/",
+        "/",
+        "--proc",
+        "/proc",
+        "--dev",
+        "/dev",
+        "/bin/true",
+    ]
 
 
 def test_explicit_weaker_nested_sandbox_remains_fail_closed(tmp_path, monkeypatch):

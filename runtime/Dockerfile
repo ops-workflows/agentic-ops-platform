@@ -1,3 +1,33 @@
+FROM python:3.11-slim AS bubblewrap-builder
+
+ARG BUBBLEWRAP_VERSION=0.11.0
+ARG BUBBLEWRAP_SHA256=988fd6b232dafa04b8b8198723efeaccdb3c6aa9c1c7936219d5791a8b7a8646
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        build-essential \
+        curl \
+        libcap-dev \
+        meson \
+        ninja-build \
+        pkg-config \
+        xz-utils \
+        && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL \
+            "https://github.com/containers/bubblewrap/releases/download/v${BUBBLEWRAP_VERSION}/bubblewrap-${BUBBLEWRAP_VERSION}.tar.xz" \
+            -o /tmp/bubblewrap.tar.xz \
+        && echo "${BUBBLEWRAP_SHA256}  /tmp/bubblewrap.tar.xz" | sha256sum -c - \
+        && tar -xJf /tmp/bubblewrap.tar.xz -C /tmp \
+        && meson setup /tmp/bubblewrap-build "/tmp/bubblewrap-${BUBBLEWRAP_VERSION}" \
+            --prefix=/usr \
+            -Dbash_completion=disabled \
+            -Dman=disabled \
+            -Dselinux=disabled \
+            -Dtests=false \
+            -Dzsh_completion=disabled \
+        && meson compile -C /tmp/bubblewrap-build
+
 FROM python:3.11-slim
 
 LABEL maintainer="ai-ops-platform"
@@ -5,13 +35,16 @@ LABEL description="Agentic Ops runtime — ephemeral container for agent session
 
 # System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    bubblewrap \
     curl \
     git \
+    libcap2 \
     socat \
     tar \
     jq \
     && rm -rf /var/lib/apt/lists/*
+
+COPY --from=bubblewrap-builder /tmp/bubblewrap-build/bwrap /usr/bin/bwrap
+RUN test "$(bwrap --version)" = "bubblewrap 0.11.0"
 
 # ── Node.js + Claude Code CLI ──────────────────────────────────────
 # The claude-agent-sdk Python package spawns the `claude` CLI binary

@@ -186,8 +186,7 @@ class DockerRuntimeLauncher:
             run_kwargs["cap_add"] = ["SYS_ADMIN"]
             run_kwargs["environment"]["CLAUDE_SANDBOX_ENABLE_WEAKER_NESTED"] = "1"
         elif sandbox_mode == "gvisor":
-            run_kwargs["runtime"] = "runsc"
-            run_kwargs["environment"]["CLAUDE_SANDBOX_ENABLE_WEAKER_NESTED"] = "1"
+            run_kwargs["runtime"] = "runsc-pr13532"
 
         container = self.client.containers.run(**run_kwargs)
         return RuntimeHandle(

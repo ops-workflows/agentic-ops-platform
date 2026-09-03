@@ -101,7 +101,7 @@ def test_docker_launcher_uses_gha_sandbox_mode(monkeypatch):
     assert kwargs["environment"]["CLAUDE_SANDBOX_ENABLE_WEAKER_NESTED"] == "1"
 
 
-def test_docker_launcher_uses_gvisor_runtime_with_weaker_nested_sandbox(monkeypatch):
+def test_docker_launcher_uses_gvisor_compatibility_runtime_without_native_relaxations(monkeypatch):
     monkeypatch.setenv("SANDBOX_MODE", "gvisor")
     client = MagicMock()
     client.containers.get.side_effect = docker.errors.NotFound("missing")
@@ -120,10 +120,10 @@ def test_docker_launcher_uses_gvisor_runtime_with_weaker_nested_sandbox(monkeypa
     )
 
     kwargs = client.containers.run.call_args.kwargs
-    assert kwargs["runtime"] == "runsc"
+    assert kwargs["runtime"] == "runsc-pr13532"
     assert "security_opt" not in kwargs
     assert "cap_add" not in kwargs
-    assert kwargs["environment"]["CLAUDE_SANDBOX_ENABLE_WEAKER_NESTED"] == "1"
+    assert "CLAUDE_SANDBOX_ENABLE_WEAKER_NESTED" not in kwargs["environment"]
 
 
 def test_docker_launcher_preserves_docker_desktop_host_routing(monkeypatch):
