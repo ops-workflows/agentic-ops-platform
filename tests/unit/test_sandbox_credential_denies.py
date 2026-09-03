@@ -108,6 +108,20 @@ def test_bubblewrap_support_probe_checks_strict_namespaces(monkeypatch):
     ]
 
 
+def test_runtime_dns_override_replaces_docker_embedded_resolver(tmp_path, monkeypatch):
+    resolv_conf = tmp_path / "resolv.conf"
+    monkeypatch.setattr(session_entrypoint, "RESOLV_CONF_PATH", resolv_conf)
+    monkeypatch.setenv("RUNTIME_DNS_SERVERS", " 193.229.0.40,193.229.0.42 ")
+
+    session_entrypoint._apply_runtime_dns_override()
+
+    assert resolv_conf.read_text() == (
+        "nameserver 193.229.0.40\n"
+        "nameserver 193.229.0.42\n"
+        "options edns0 trust-ad ndots:0\n"
+    )
+
+
 def test_explicit_weaker_nested_sandbox_remains_fail_closed(tmp_path, monkeypatch):
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(

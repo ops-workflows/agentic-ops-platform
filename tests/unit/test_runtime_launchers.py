@@ -17,6 +17,7 @@ pytestmark = pytest.mark.unit
 def test_docker_launcher_translates_spec_to_container_run(monkeypatch):
     monkeypatch.setattr("session_manager.runtime_launchers.sys.platform", "linux")
     monkeypatch.delenv("SANDBOX_MODE", raising=False)
+    monkeypatch.delenv("RUNTIME_DNS_SERVERS", raising=False)
     monkeypatch.setenv("DOCKER_NETWORK", "test-network")
     client = MagicMock()
     client.containers.get.side_effect = docker.errors.NotFound("missing")
@@ -102,9 +103,24 @@ def test_docker_launcher_uses_gha_sandbox_mode(monkeypatch):
 
 
 def test_docker_launcher_uses_gvisor_compatibility_runtime_without_native_relaxations(monkeypatch):
+    monkeypatch.setattr("session_manager.runtime_launchers.sys.platform", "linux")
     monkeypatch.setenv("SANDBOX_MODE", "gvisor")
+    monkeypatch.setenv("RUNTIME_DNS_SERVERS", " 193.229.0.40,193.229.0.42 ")
     client = MagicMock()
     client.containers.get.side_effect = docker.errors.NotFound("missing")
+    peer = MagicMock()
+    peer.name = "deploy-mcp-salesforce-1"
+    peer.attrs = {
+        "NetworkSettings": {
+            "Networks": {
+                "ai-ops-network": {
+                    "IPAddress": "172.19.0.7",
+                    "DNSNames": ["deploy-mcp-salesforce-1", "mcp-salesforce", "peer-id"],
+                }
+            }
+        }
+    }
+    client.networks.get.return_value.containers = [peer]
     container = MagicMock()
     container.id = "container-id"
     container.short_id = "abc123"
@@ -124,6 +140,13 @@ def test_docker_launcher_uses_gvisor_compatibility_runtime_without_native_relaxa
     assert "security_opt" not in kwargs
     assert "cap_add" not in kwargs
     assert "CLAUDE_SANDBOX_ENABLE_WEAKER_NESTED" not in kwargs["environment"]
+    assert kwargs["extra_hosts"] == {
+        "host.docker.internal": "host-gateway",
+        "deploy-mcp-salesforce-1": "172.19.0.7",
+        "mcp-salesforce": "172.19.0.7",
+        "peer-id": "172.19.0.7",
+    }
+    assert kwargs["environment"]["RUNTIME_DNS_SERVERS"] == "193.229.0.40,193.229.0.42"
 
 
 def test_docker_launcher_preserves_docker_desktop_host_routing(monkeypatch):

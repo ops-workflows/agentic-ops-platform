@@ -121,6 +121,16 @@ agent-session container. Keep it as an explicitly selected runtime rather than
 changing Docker's global default unless every workload on the VM has been
 qualified for it.
 
+gVisor netstack cannot use Docker's embedded DNS on a user-defined bridge
+network because it does not import Docker's netfilter redirection for
+`127.0.0.11` ([gVisor issue 7469](https://github.com/google/gvisor/issues/7469)).
+For gVisor sessions, the Docker launcher therefore snapshots the current IP and
+DNS aliases of peers already attached to `DOCKER_NETWORK` into the session's
+`/etc/hosts`. Set `RUNTIME_DNS_SERVERS` on session-manager to a comma-separated
+list of deployment DNS server IPs for names outside that Docker network. Do not
+switch gVisor to host networking merely to restore DNS; that weakens its network
+isolation boundary.
+
 **Kubernetes.** A plain Pod is not an agent-sandbox product by itself. On GKE,
 [GKE Agent Sandbox](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/machine-learning/agent-sandbox)
 is a managed implementation designed for isolated, stateful agent workloads;
