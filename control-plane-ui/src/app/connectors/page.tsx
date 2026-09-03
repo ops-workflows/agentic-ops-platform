@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { Pause, Play, RefreshCw } from 'lucide-react';
 import { apiFetch, type Connector } from '@/lib/api';
 
 function humanize(value: string) {
@@ -11,6 +12,7 @@ export default function ConnectorsPage() {
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -30,6 +32,27 @@ export default function ConnectorsPage() {
     load();
   }, [load]);
 
+  async function toggleConnector(connector: Connector) {
+    setTogglingId(connector.id);
+    setError(null);
+    try {
+      const action = connector.paused ? 'resume' : 'pause';
+      const updated = await apiFetch<Connector>(
+        `/api/platform/connectors/${connector.id}/${action}`,
+        { method: 'POST' },
+      );
+      setConnectors((current) =>
+        current.map((item) => (item.id === updated.id ? updated : item)),
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Failed to update connector',
+      );
+    } finally {
+      setTogglingId(null);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
@@ -40,8 +63,9 @@ export default function ConnectorsPage() {
         </div>
         <button
           onClick={load}
-          className="rounded-btn border border-ops-border bg-ops-surface px-4 py-2 text-sm text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-accent)]/30 hover:text-[var(--color-text-primary)]"
+          className="inline-flex items-center gap-2 rounded-btn border border-ops-border bg-ops-surface px-4 py-2 text-sm text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-accent)]/30 hover:text-[var(--color-text-primary)]"
         >
+          <RefreshCw aria-hidden="true" className="h-4 w-4" />
           Refresh
         </button>
       </div>
@@ -71,9 +95,20 @@ export default function ConnectorsPage() {
                     {connector.summary}
                   </p>
                 </div>
-                <span className="rounded-full bg-ops-surface-raised px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] text-[var(--color-text-tertiary)]">
-                  {humanize(connector.source_type)}
-                </span>
+                <div className="flex flex-col items-end gap-2">
+                  <span className="rounded-full bg-ops-surface-raised px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] text-[var(--color-text-tertiary)]">
+                    {humanize(connector.source_type)}
+                  </span>
+                  <span
+                    className={`rounded-full px-2.5 py-1 text-[10px] uppercase tracking-[0.12em] ${
+                      connector.paused
+                        ? 'bg-[var(--color-warning-muted)] text-[var(--color-warning)]'
+                        : 'bg-[var(--color-success-muted)] text-[var(--color-success)]'
+                    }`}
+                  >
+                    {connector.paused ? 'Paused' : 'Active'}
+                  </span>
+                </div>
               </div>
 
               <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -101,6 +136,22 @@ export default function ConnectorsPage() {
                   ))}
                 </div>
               ) : null}
+
+              <div className="mt-5 border-t border-ops-border-subtle pt-4">
+                <button
+                  type="button"
+                  onClick={() => toggleConnector(connector)}
+                  disabled={togglingId === connector.id}
+                  className="inline-flex items-center gap-2 rounded-btn border border-ops-border bg-ops-surface-raised px-3 py-2 text-sm text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-accent)]/40 hover:text-[var(--color-text-primary)] disabled:cursor-wait disabled:opacity-50"
+                >
+                  {connector.paused ? (
+                    <Play aria-hidden="true" className="h-4 w-4" />
+                  ) : (
+                    <Pause aria-hidden="true" className="h-4 w-4" />
+                  )}
+                  {connector.paused ? 'Resume' : 'Pause'}
+                </button>
+              </div>
             </article>
           ))}
           {connectors.length === 0 ? (

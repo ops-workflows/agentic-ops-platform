@@ -37,6 +37,12 @@ async def test_agent_pause_and_resume_toggles_paused_flag(async_engine, fixture_
     with patch.object(settings, "workflow_repo_paths", str(fixture_workflows_dir)):
         await run_provisioner_scan()
 
+    from shared.lib.db import async_session_factory
+
+    async with async_session_factory() as session:
+        agent = (await session.execute(select(Agent).where(Agent.name == "platform-test"))).scalar_one()
+        assert agent.paused is True
+
     async with await _make_client(fixture_workflows_dir) as client:
         # Pause
         resp = await client.post("/api/agents/platform-test/pause")
@@ -49,8 +55,6 @@ async def test_agent_pause_and_resume_toggles_paused_flag(async_engine, fixture_
         assert resp.json()["paused"] is False
 
     # Verify DB state
-    from shared.lib.db import async_session_factory
-
     async with async_session_factory() as session:
         agent = (await session.execute(select(Agent).where(Agent.name == "platform-test"))).scalar_one()
         assert agent.paused is False
@@ -79,6 +83,10 @@ async def test_schedule_handler_creates_task_and_updates_last_run(
     with patch.object(settings, "workflow_repo_paths", str(fixture_workflows_dir)):
         await run_provisioner_scan()
 
+    agent = (await db_session.execute(select(Agent).where(Agent.name == "platform-test"))).scalar_one()
+    agent.paused = False
+    await db_session.commit()
+
     # Fire the scheduled handler directly (simulates a cron fire).
     await _schedule_job_handler(
         agent_name="platform-test",
@@ -106,6 +114,31 @@ async def test_schedule_handler_creates_task_and_updates_last_run(
 
 
 @pytest.mark.asyncio
+async def test_schedule_handler_skips_paused_agent(async_engine, fixture_workflows_dir: Path, db_session) -> None:
+    from gateway.provisioner import run_provisioner_scan
+    from gateway.scheduler import _schedule_job_handler
+    from shared.lib.config import settings
+    from shared.lib.models import Agent, Schedule, Task
+
+    with patch.object(settings, "workflow_repo_paths", str(fixture_workflows_dir)):
+        await run_provisioner_scan()
+
+    await _schedule_job_handler(
+        agent_name="platform-test",
+        schedule_name="test-daily",
+        prompt="scheduled test prompt",
+        message_channel="platform-test-channel",
+    )
+
+    assert (await db_session.execute(select(Task))).scalars().all() == []
+    agent = (await db_session.execute(select(Agent).where(Agent.name == "platform-test"))).scalar_one()
+    sched = (
+        await db_session.execute(select(Schedule).where(Schedule.agent_id == agent.id, Schedule.name == "test-daily"))
+    ).scalar_one()
+    assert sched.last_run is None
+
+
+@pytest.mark.asyncio
 async def test_scheduler_executes_registered_job_and_queues_task(
     async_engine, fixture_workflows_dir: Path, db_session
 ) -> None:
@@ -123,6 +156,8 @@ async def test_scheduler_executes_registered_job_and_queues_task(
         await run_provisioner_scan()
 
         agent = (await db_session.execute(select(Agent).where(Agent.name == "platform-test"))).scalar_one()
+        agent.paused = False
+        await db_session.commit()
         agent_id = agent.id
 
         await start_scheduler()

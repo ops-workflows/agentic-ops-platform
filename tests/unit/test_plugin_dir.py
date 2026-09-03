@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 pytestmark = pytest.mark.unit
 
@@ -108,40 +109,40 @@ def test_discover_message_routes_maps_channel_to_workflow(fixture_workflows_dir:
 
 
 def test_discover_message_routes_adds_structured_rule(tmp_path: Path) -> None:
-    workflow_dir = tmp_path / "online-alerts"
+    workflow_dir = tmp_path / "alert-triage"
     workflow_dir.mkdir()
-    (workflow_dir / "agent.yaml").write_text(
-        """name: online-alerts
-description: Test alerts
-messaging:
-  rules:
-    - id: production-alarm
-      provider: mattermost
-      channels: [online-monitoring]
-      priority: 100
-      match:
-        type: regex
-        pattern: 'production-.*?Alarm'
-        scope: full_body
-      trusted_senders:
-        user_ids: [user-1]
-        webhook_ids: [webhook-1]
-        webhook_names: [AWS CloudWatch]
-      allow_bot: true
-      root_posts_only: true
-      preserve_full_body: true
-      constraints:
-        environments: [production]
-        accounts: ['123456789012']
-"""
-    )
+    config = {
+        "name": "alert-triage",
+        "description": "Test alerts",
+        "messaging": {
+            "rules": [
+                {
+                    "id": "production-alarm",
+                    "provider": "mattermost",
+                    "channels": ["alerts"],
+                    "priority": 100,
+                    "match": {"type": "regex", "pattern": "production-.*?Alarm", "scope": "full_body"},
+                    "trusted_senders": {
+                        "user_ids": ["user-1"],
+                        "webhook_ids": ["webhook-1"],
+                        "webhook_names": ["AWS CloudWatch"],
+                    },
+                    "allow_bot": True,
+                    "root_posts_only": True,
+                    "preserve_full_body": True,
+                    "constraints": {"environments": ["production"], "accounts": ["123456789012"]},
+                }
+            ]
+        },
+    }
+    (workflow_dir / "agent.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
 
     routes = discover_message_routes(tmp_path)
 
     assert routes == [
         MessageRoute(
-            workflow="online-alerts",
-            channel="online-monitoring",
+            workflow="alert-triage",
+            channel="alerts",
             rule_id="production-alarm",
             provider="mattermost",
             priority=100,
@@ -184,6 +185,20 @@ def test_discover_workflow_packages_accepts_repo_root_with_workflows(fixture_rep
     by_name = {package.name: package for package in packages}
     assert "platform-test" in by_name
     assert by_name["platform-test"].path == fixture_repo_root / "workflows" / "platform-test"
+
+
+def test_discover_workflow_packages_does_not_expand_environment_values(tmp_path: Path, monkeypatch) -> None:
+    workflow_dir = tmp_path / "workflows" / "alerts"
+    workflow_dir.mkdir(parents=True)
+    (workflow_dir / "agent.yaml").write_text(
+        "name: alerts\nmessaging:\n  channels:\n    - ${ALERTS_CHANNEL:-production-alerts}\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("ALERTS_CHANNEL", "rnd-alerts")
+    assert discover_workflow_packages([tmp_path])[0].config["messaging"]["channels"] == [
+        "${ALERTS_CHANNEL:-production-alerts}"
+    ]
 
 
 def test_discover_workflow_packages_scans_multiple_roots(tmp_path: Path, fixture_workflows_dir: Path) -> None:

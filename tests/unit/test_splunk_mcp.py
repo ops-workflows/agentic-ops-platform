@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import json
 
@@ -18,13 +19,9 @@ def _reload_with_policy(monkeypatch, tmp_path):
         """mcps:
     config:
         splunk:
-            allowed_hosts: [splunk.example.com]
-            allowed_indexes: [online, online-audit]
             max_results: 50
             max_window_hours: 24
             max_evidence_bytes: 8192
-            saved_searches:
-                online-api-errors: nobody/search/Online-UI-API-errors
 """
     )
     monkeypatch.setenv("PLATFORM_CONFIG_FILE", str(config))
@@ -125,7 +122,7 @@ def test_search_logs_enforces_policy_and_compacts_transport_response(monkeypatch
     assert result["total_results"] == 1
     assert "results" not in result
     assert captured["params"]["count"] == 50
-    assert captured["params"]["earliest_time"] == "-1h"
+    assert captured["params"]["earliest_time"] == "-15m"
     assert captured["params"]["latest_time"] == "now"
 
 
@@ -147,11 +144,26 @@ def test_compact_evidence_applies_shared_configured_redaction(monkeypatch, tmp_p
     assert evidence["groups"][0]["samples"][0]["stack_excerpt"] == "failed for <customer>"
 
 
-def test_search_logs_rejects_missing_disallowed_or_unsafe_index(monkeypatch, tmp_path) -> None:
+def test_search_logs_accepts_text_and_spl(monkeypatch, tmp_path) -> None:
     splunk = _reload_with_policy(monkeypatch, tmp_path)
+    captured = []
 
-    assert "explicit index" in splunk.search_logs("source=online-ui-api")["error"]
-    assert "not allowed" in splunk.search_logs("index=secret source=logs")["error"]
+    def request(_method, _endpoint, **kwargs):
+        captured.append(kwargs)
+        return {"results": [], "count": 0}
+
+    monkeypatch.setattr(splunk, "_splunk_request", request)
+
+    splunk.search_logs("checkout failed", headers={})
+    splunk.search_logs("SEARCH index=online source=api", headers={})
+    splunk.search_logs('| makeresults | eval message="ready"', headers={})
+
+    assert [call["params"]["search"] for call in captured] == [
+        "search checkout failed",
+        "SEARCH index=online source=api",
+        '| makeresults | eval message="ready"',
+    ]
+    assert "must not be empty" in splunk.search_logs("  ")["error"]
     assert "disallowed command" in splunk.search_logs("index=online | collect index=other")["error"]
     assert "earliest and latest parameters" in splunk.search_logs("index=online earliest=-7d")["error"]
 
@@ -181,6 +193,15 @@ def test_build_auth_headers_accepts_standard_bearer_header(monkeypatch, tmp_path
     ) == {"Authorization": "Bearer workflow-token"}
 
 
+def test_parse_response_preserves_single_export_result(monkeypatch, tmp_path) -> None:
+    splunk = _reload_with_policy(monkeypatch, tmp_path)
+
+    assert splunk._parse_response('{"result":{"_raw":"one event"}}') == {
+        "results": [{"_raw": "one event"}],
+        "count": 1,
+    }
+
+
 def test_build_auth_headers_uses_request_username_and_password(monkeypatch, tmp_path) -> None:
     splunk = _reload_with_policy(monkeypatch, tmp_path)
 
@@ -205,26 +226,70 @@ def test_build_auth_headers_uses_request_username_and_password(monkeypatch, tmp_
             "x-splunk-username": "service-user",
             "x-splunk-password": "service-password",
         },
-    ) == {"Cookie": "splunkd_8000=session-key"}
+    ) == {"Authorization": "Splunk session-key"}
+
+    monkeypatch.setattr(splunk, "SESSION_COOKIE_NAME", "proxy_session")
+    assert splunk._build_auth_headers(
+        Client(),
+        "https://splunk.example.com",
+        {
+            "x-splunk-username": "service-user",
+            "x-splunk-password": "service-password",
+        },
+    ) == {"Cookie": "proxy_session=session-key"}
 
 
-def test_parse_alert_url_accepts_only_configured_host_and_safe_sid(monkeypatch, tmp_path) -> None:
+def test_splunk_request_uses_workflow_base_url_without_host_policy(monkeypatch, tmp_path) -> None:
+    splunk = _reload_with_policy(monkeypatch, tmp_path)
+    captured = {}
+
+    class Response:
+        content = b'{"results": []}'
+        text = '{"results": []}'
+
+        def raise_for_status(self):
+            return None
+
+    class Client:
+        headers = {}
+
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get(self, url, *, params):
+            captured.update(url=url, params=params)
+            return Response()
+
+    monkeypatch.setattr(splunk.httpx, "Client", Client)
+    monkeypatch.setattr(splunk, "_build_auth_headers", lambda *_args: {})
+
+    result = splunk._splunk_request(
+        "GET",
+        "/services/search/jobs/export",
+        headers={"x-splunk-base-url": "https://splunk-proxy.example.test/api"},
+        params={"output_mode": "json"},
+    )
+
+    assert result == {"results": []}
+    assert captured["url"] == "https://splunk-proxy.example.test/api/services/search/jobs/export"
+
+
+def test_splunk_exposes_only_search_and_sid_results_tools(monkeypatch, tmp_path) -> None:
     splunk = _reload_with_policy(monkeypatch, tmp_path)
 
-    parsed = splunk.parse_alert_url("https://splunk.example.com/en-GB/app/search/@go?sid=scheduler__online_errors")
-
-    assert parsed["app"] == "search"
-    assert parsed["sid"] == "scheduler__online_errors"
-    assert (
-        "not allowed"
-        in splunk.parse_alert_url("https://other.example.com/en-GB/app/search/@go?sid=scheduler__online_errors")[
-            "error"
-        ]
-    )
-    assert (
-        "valid sid"
-        in splunk.parse_alert_url("https://splunk.example.com/en-GB/app/search/@go?sid=../../unsafe")["error"]
-    )
+    assert sorted(tool.name for tool in asyncio.run(splunk.mcp.list_tools())) == ["get_search_results", "search_logs"]
+    assert callable(splunk.search_logs)
+    assert callable(splunk.get_search_results)
+    assert not hasattr(splunk, "parse_alert_url")
+    assert not hasattr(splunk, "get_search_job")
+    assert not hasattr(splunk, "run_saved_search")
+    assert not hasattr(splunk, "get_alert_events")
 
 
 def test_get_search_results_requires_final_job_and_compacts_rows(monkeypatch, tmp_path) -> None:
@@ -269,65 +334,6 @@ def test_get_search_results_rejects_preview_job(monkeypatch, tmp_path) -> None:
 
     assert "not successfully finalized" in result["error"]
     assert result["job"]["is_done"] is False
-
-
-def test_run_saved_search_uses_configured_alias_and_returns_compact_statistics(monkeypatch, tmp_path) -> None:
-    splunk = _reload_with_policy(monkeypatch, tmp_path)
-    responses = [
-        {
-            "entry": [
-                {
-                    "content": {
-                        "description": "Online API errors",
-                        "search": "index=online source=online-ui-api severity=ERROR",
-                        "disabled": False,
-                        "cron_schedule": "*/5 * * * *",
-                        "dispatch.earliest_time": "-10m",
-                        "dispatch.latest_time": "now",
-                        "alert_type": "number of events",
-                        "alert_threshold": "0",
-                        "actions": "webhook",
-                    }
-                }
-            ]
-        },
-        {
-            "results": [
-                {"_time": "2026-08-11T10:00:00Z", "source": "online-ui-api", "message": "failure"},
-                {"_time": "2026-08-11T10:01:00Z", "source": "online-ui-api", "message": "failure"},
-            ],
-            "count": 2,
-        },
-    ]
-    captured = []
-
-    def request(method, endpoint, **kwargs):
-        captured.append((method, endpoint, kwargs))
-        return responses.pop(0)
-
-    monkeypatch.setattr(splunk, "_splunk_request", request)
-    evidence = splunk.run_saved_search(
-        "online-api-errors",
-        "-15m",
-        "now",
-        headers={},
-    )
-
-    assert evidence["total_results"] == 2
-    assert evidence["groups"][0]["count"] == 2
-    assert evidence["groups"][0]["first_seen"] == "2026-08-11T10:00:00Z"
-    assert evidence["groups"][0]["last_seen"] == "2026-08-11T10:01:00Z"
-    assert "fingerprint" not in evidence["groups"][0]
-    assert evidence["saved_search"]["alias"] == "online-api-errors"
-    assert evidence["saved_search"]["name"] == "Online-UI-API-errors"
-    assert captured[0][1].endswith("/nobody/search/saved/searches/Online-UI-API-errors")
-    assert captured[-1][1] == "/services/search/jobs/export"
-    assert captured[-1][2]["params"]["earliest_time"] == "-15m"
-
-
-def test_run_saved_search_rejects_unconfigured_name(monkeypatch, tmp_path) -> None:
-    splunk = _reload_with_policy(monkeypatch, tmp_path)
-    assert "not configured" in splunk.run_saved_search("unknown", headers={})["error"]
 
 
 def test_compact_evidence_enforces_total_serialized_budget(monkeypatch, tmp_path) -> None:

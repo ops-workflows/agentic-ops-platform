@@ -46,11 +46,11 @@ memory:
   backend: hindsight
   banks:
     business:
-      incident-investigator: incident-rca-customer
-      sf-alerts-investigator: incident-rca-sf-alerts
+      customer-support: support-history
+      infrastructure-ops: infrastructure-history
     learning:
-      incident-investigator: workflow-learning-customer
-      sf-alerts-investigator: workflow-learning-sf-alerts
+      customer-support: customer-support-learning
+      infrastructure-ops: infrastructure-ops-learning
 ```
 
 The `memory` MCP (backed by Hindsight) resolves the right bank server-side

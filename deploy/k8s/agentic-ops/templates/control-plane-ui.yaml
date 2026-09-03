@@ -23,8 +23,8 @@ spec:
             - name: http
               containerPort: {{ .Values.controlPlaneUi.port }}
           env:
-            - name: NEXT_PUBLIC_API_URL
-              value: {{ .Values.controlPlaneUi.env.NEXT_PUBLIC_API_URL | quote }}
+            - name: INTERNAL_GATEWAY_URL
+              value: http://{{ include "agentic-ops.fullname" . }}-gateway:{{ .Values.gateway.port }}
 ---
 apiVersion: v1
 kind: Service

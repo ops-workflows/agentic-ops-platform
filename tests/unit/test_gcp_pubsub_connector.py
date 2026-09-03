@@ -68,6 +68,11 @@ def test_subscriber_callback_uses_connector_event_loop(monkeypatch):
     loop = object()
     monkeypatch.setattr(main, "_create_task", fake_create_task)
 
+    async def connector_is_active(_connector_id: str) -> bool:
+        return False
+
+    monkeypatch.setattr(main, "_connector_is_paused", connector_is_active)
+
     def fake_submit(coroutine, submitted_loop):
         captured["loop"] = submitted_loop
         import asyncio
@@ -78,12 +83,48 @@ def test_subscriber_callback_uses_connector_event_loop(monkeypatch):
     monkeypatch.setattr(main.asyncio, "run_coroutine_threadsafe", fake_submit)
     message = FakeMessage()
 
-    main._subscriber_callback(loop, {"target": {}})(message)
+    main._subscriber_callback(loop, {"_instance_id": "event-intake", "target": {}})(message)
 
     assert captured["loop"] is loop
     assert captured["payload"] == {"event_id": "event-1"}
     assert message.acked is True
     assert message.nacked is False
+
+
+def test_subscriber_callback_nacks_message_when_connector_is_paused(monkeypatch):
+    class FakeFuture:
+        def result(self):
+            return False
+
+    class FakeMessage:
+        data = b'{"event_id": "event-1"}'
+        attributes = {}
+        message_id = "message-paused"
+        acked = False
+        nacked = False
+
+        def ack(self):
+            self.acked = True
+
+        def nack(self):
+            self.nacked = True
+
+    def fake_submit(coroutine, _loop):
+        coroutine.close()
+        return FakeFuture()
+
+    monkeypatch.setattr(main.asyncio, "run_coroutine_threadsafe", fake_submit)
+    message = FakeMessage()
+
+    main._subscriber_callback(object(), {"_instance_id": "event-intake"})(message)
+
+    assert message.acked is False
+    assert message.nacked is True
+
+
+@pytest.mark.asyncio
+async def test_missing_connector_id_is_paused() -> None:
+    assert await main._connector_is_paused("") is True
 
 
 def test_gcs_payload_filter_acks_unmatched_object_without_creating_task(monkeypatch):
@@ -151,7 +192,7 @@ async def test_wait_for_subscriber_propagates_stream_failure(monkeypatch):
     monkeypatch.setattr(main, "_shutdown", False)
 
     with pytest.raises(RuntimeError, match="stream failed"):
-        await main._wait_for_subscriber(FailedFuture())
+        await main._wait_for_subscriber(FailedFuture(), "event-intake")
 
 
 def test_parse_gcs_email_prefers_plain_text_and_extracts_headers():
@@ -255,7 +296,7 @@ async def test_create_task_defers_message_channel_to_workflow(monkeypatch):
         {},
         {
             "target": {
-                "workflow": "sf-alerts-investigator",
+                "workflow": "example-workflow",
                 "channel": "gcp-pubsub",
             }
         },

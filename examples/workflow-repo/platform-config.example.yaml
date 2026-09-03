@@ -59,13 +59,9 @@ mcps:
   #     api_version: v60.0
   #     allowed_objects: [Account, Case, Contact]
   #   splunk:
-  #     allowed_hosts: [splunk.example.com]
-  #     allowed_indexes: [main]
   #     max_results: 500
   #     max_window_hours: 24
   #     max_evidence_bytes: 65536
-  #     saved_searches:
-  #       example-errors: nobody/search/Example-errors
   #   evidence:
   #     redaction_patterns:
   #       - pattern: 'customer-[A-Z0-9]+'

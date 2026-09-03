@@ -10,11 +10,15 @@ the initial local checkout, but never modifies its `platform-config.yaml`.
 Prompts:
 
 1. **Deployment target** — `compose` or `kubernetes`.
-2. **Workflow source** — `remote` (git URL + ref + initial checkout path) or
+2. **Compose mode** — `local` or `production`. Local mode asks for the
+   internet-reachable Gateway URL used by signed approval callbacks, keeps the
+   browser UI on `http://localhost:3000`, selects the local sandbox mode, and
+   disables private auth ingress.
+3. **Workflow source** — `remote` (git URL + ref + initial checkout path) or
    `local` (an existing filesystem checkout path). Compose bind-mounts the
    checkout; Kubernetes uses the checkout's config for cold start and then
    performs remote syncs with the configured GitHub App.
-3. **One-time clone PAT** (remote only, optional for public repositories). It
+4. **One-time clone PAT** (remote only, optional for public repositories). It
    is supplied to Git only through a temporary `GIT_ASKPASS` process and is
    never written to `compose.env`, a Kubernetes Secret, the Git remote URL, or
    platform config. All subsequent workflow sync, Knowledge Source sync,
@@ -22,13 +26,17 @@ Prompts:
    GitHub App connections in `platform-config.yaml`.
    Kubernetes bootstrap also prompts for the target namespace; use the same
    namespace with `helm upgrade`.
-4. **AGE identity** — an armored
+5. **AGE identity** — an armored
    `AGE-SECRET-KEY-...` string or a path to a key file. A path is read into
    the generated secret artifact so it works inside containers.
-5. **LLM API key** — one
+6. **LLM API key** — one
    key shared by runtime model profiles and Hindsight's LLM/embeddings clients.
-6. **Postgres password** and **object-store secret key** —
+7. **Postgres password** and **object-store secret key** —
    direct-container secrets required by Compose infrastructure.
+8. **OIDC client secret** and **OAuth2 proxy cookie secret** — production
+   Compose only. Bootstrap stores them in the generated, mode-`0600`
+   `compose.env`; non-secret issuer/client coordinates stay in the workflow
+   repo's committed `deploy/compose.env`.
 
 Generated artifact per target (none of these are committed):
 
@@ -36,6 +44,28 @@ Generated artifact per target (none of these are committed):
 | --- | --- | --- |
 | `compose` | `compose.env` | `make up` |
 | `kubernetes` | `dist/bootstrap/k8s-secret.sh` | run the script to create/update bootstrap and `platform-config.yaml` Secrets |
+
+### Production Compose OIDC and TLS
+
+Provision a confidential OIDC client with the authorization-code flow, PKCE
+support, and the `openid`, `profile`, and `email` scopes. Register exactly
+`${CONTROL_PLANE_UI_URL}/oauth2/callback` as an allowed callback URL. The
+callback is required: after authentication, the provider returns the browser
+to OAuth2 Proxy at that endpoint so it can validate the authorization code and
+establish the UI session.
+
+The private production override exposes only OAuth2 Proxy's HTTPS listener and
+uses secure cookies, so production Compose requires TLS even if an identity
+provider permits an HTTP localhost callback for development. A locally signed
+or self-signed certificate is sufficient for a single-machine trial when its
+issuing certificate is trusted by every browser that accesses the UI, its SAN
+matches the `CONTROL_PLANE_UI_URL` hostname, and that hostname resolves from
+the browser. Use a corporate or publicly trusted certificate for shared use.
+
+Set the resulting issuer URL and client ID in the workflow repo's committed
+`deploy/compose.env`. Supply the client secret through production bootstrap;
+never commit it. `OIDC_GROUPS_CLAIM` and `OIDC_ALLOWED_GROUP` control group
+admission after login.
 
 ## Kubernetes deployment
 
@@ -87,10 +117,10 @@ make up
 ```
 
 The workflow repo owns a committed `deploy/compose.env` with non-secret
-infrastructure coordinates. `make bootstrap` writes the separate, gitignored
-root `compose.env` with bootstrap secrets and its path to that workflow file.
-The Makefile loads both automatically (workflow file first, generated secrets
-second), so a workflow repo using shipped services needs no Compose override.
+production coordinates. `make bootstrap` writes the separate, gitignored root
+`compose.env` with bootstrap secrets, paths to the workflow deployment files,
+and local-mode overrides when selected. The Makefile loads committed defaults
+first and the generated file second.
 
 Workflow Repo **Sync** is the release boundary for workflow packages and
 repo-owned per-task runtime settings. After a successful sync, the selected

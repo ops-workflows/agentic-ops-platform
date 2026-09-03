@@ -1,10 +1,8 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
-
 export async function apiFetch<T>(
   path: string,
   options?: RequestInit,
 ): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, {
+  const res = await fetch(path, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -182,6 +180,7 @@ export interface Connector {
   target_channel: string | null;
   tags: string[];
   type: string;
+  paused: boolean;
 }
 
 export interface WorkflowRepoStatus {

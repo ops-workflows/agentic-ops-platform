@@ -115,14 +115,14 @@ def test_auto_recall_timeout_is_fail_open(monkeypatch, tmp_path):
 
 def test_auto_recall_uses_task_prompt_at_session_start(monkeypatch, tmp_path):
     monkeypatch.setenv("TASK_ID", "task-session-start")
-    monkeypatch.setenv("TASK_PROMPT", "Investigate the Salesforce alert")
+    monkeypatch.setenv("TASK_PROMPT", "Investigate the service alert")
     hook = _load_auto_recall_hook_module()
     monkeypatch.setattr(hook.tempfile, "gettempdir", lambda: str(tmp_path))
     monkeypatch.setattr(hook, "resolve_bank_id", lambda workflow: "test-bank")
 
     def fake_post(url: str, json: dict, timeout: float):
         if url.endswith("/memories/recall"):
-            assert json["query"] == "Investigate the Salesforce alert"
+            assert json["query"] == "Investigate the service alert"
             return _Response({"items": [{"id": "1", "text": "similar incident"}]})
         return _Response({})
 

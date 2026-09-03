@@ -1,4 +1,4 @@
-"""Splunk MCP Server — use for application and service logs, saved searches, and fired-alert history."""
+"""Splunk MCP server for bounded log searches and finalized search-job results."""
 
 from __future__ import annotations
 
@@ -9,9 +9,8 @@ import re
 import sys
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Annotated, Any
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import quote
 
 import httpx
 from fastmcp import FastMCP
@@ -42,14 +41,7 @@ _CONFIG_PATH = os.environ.get("PLATFORM_CONFIG_FILE", "/app/platform-config.yaml
 _POLICY = load_mcp_server_config(_CONFIG_PATH, "splunk")
 _EVIDENCE_POLICY = load_mcp_server_config(_CONFIG_PATH, "evidence")
 _REDACTION_PATTERNS = compile_redaction_patterns(_EVIDENCE_POLICY.get("redaction_patterns"))
-ALLOWED_HOSTS = frozenset(str(value).lower() for value in _POLICY.get("allowed_hosts", []) if str(value).strip())
-ALLOWED_INDEXES = frozenset(str(value) for value in _POLICY.get("allowed_indexes", []) if str(value).strip())
-SAVED_SEARCHES = {
-    str(alias): str(identity)
-    for alias, identity in (_POLICY.get("saved_searches") or {}).items()
-    if str(alias).strip() and str(identity).strip()
-}
-CA_BUNDLE = str(_POLICY.get("ca_bundle") or "").strip()
+SESSION_COOKIE_NAME = str(_POLICY.get("session_cookie_name") or "").strip()
 MAX_QUERY_RESULTS = min(int(_POLICY.get("max_results") or 500), 500)
 MAX_QUERY_CHARS = min(int(_POLICY.get("max_query_chars") or 4_096), 8_192)
 MAX_WINDOW_SECONDS = min(int(_POLICY.get("max_window_hours") or 24), 168) * 3_600
@@ -60,12 +52,10 @@ _CHECKPOINT_RE = re.compile(
     re.IGNORECASE,
 )
 _UUID_RE = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b", re.I)
-_INDEX_RE = re.compile(r"(?i)(?:^|\s)index\s*=\s*[\"']?([a-z0-9_.:-]+)")
 _UNSAFE_SPL_RE = re.compile(r"(?i)(?:^|[|\s])(collect|delete|dump|outputcsv|outputlookup|sendemail)\b")
 _EMBEDDED_TIME_RE = re.compile(r"(?i)(?:^|\s)(?:earliest|latest)\s*=")
 _RELATIVE_TIME_RE = re.compile(r"^-(\d+)([mhd])$")
 _SID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,512}$")
-_NAMESPACE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 
 
 def _json_object(value: Any, warnings: list[str], field: str) -> dict[str, Any]:
@@ -195,7 +185,10 @@ def _parse_response(text: str) -> dict[str, Any]:
     if not lines:
         return {}
     if len(lines) == 1:
-        return json.loads(lines[0])
+        payload = json.loads(lines[0])
+        if isinstance(payload, dict) and isinstance(payload.get("result"), dict):
+            return {"results": [payload["result"]], "count": 1}
+        return payload
     results = []
     for line in lines:
         obj = json.loads(line)
@@ -205,17 +198,7 @@ def _parse_response(text: str) -> dict[str, Any]:
 
 
 def _build_auth_headers(client: httpx.Client, base_url: str, request_headers: dict[str, str]) -> dict[str, str]:
-    """Return the HTTP headers needed to authenticate a splunkd REST request.
-
-    - ``x-splunk-token`` present  →  ``{"Authorization": "Bearer <token>"``}
-      Works against splunkd directly on port 8089 or any proxy that accepts
-      a bearer JWT.
-
-    - ``x-splunk-username`` + ``x-splunk-password`` present  →  login via
-      ``/services/auth/login``, then ``{"Cookie": "splunkd_8000=<session_key>"``}
-      Works against the Splunk Web ``/__raw/`` proxy on 443 where the management
-      port is not directly reachable.
-    """
+    """Return authentication headers for a Splunk REST request."""
     token = request_headers.get("x-splunk-token", "").strip() or extract_bearer_token(request_headers)
     if token:
         return {"Authorization": f"Bearer {token}"}
@@ -229,7 +212,9 @@ def _build_auth_headers(client: httpx.Client, base_url: str, request_headers: di
         )
         resp.raise_for_status()
         session_key = resp.json()["sessionKey"]
-        return {"Cookie": f"splunkd_8000={session_key}"}
+        if SESSION_COOKIE_NAME:
+            return {"Cookie": f"{SESSION_COOKIE_NAME}={session_key}"}
+        return {"Authorization": f"Splunk {session_key}"}
 
     raise ValueError("Provide a Splunk token or username/password through request headers")
 
@@ -241,14 +226,6 @@ def _validate_splunk_query(query: str) -> str | None:
         return "Splunk query contains a disallowed command"
     if _EMBEDDED_TIME_RE.search(query):
         return "Splunk query must use the tool's earliest and latest parameters"
-    indexes = set(_INDEX_RE.findall(query))
-    if not indexes:
-        return "Splunk query must include an explicit index"
-    if not ALLOWED_INDEXES:
-        return "Splunk allowed_indexes policy is not configured"
-    denied = sorted(indexes - ALLOWED_INDEXES)
-    if denied:
-        return f"Splunk indexes are not allowed: {', '.join(denied)}"
     return None
 
 
@@ -290,27 +267,6 @@ def _validate_sid(sid: str) -> str | None:
     return None
 
 
-def _parse_alert_url(alert_url: str) -> dict[str, Any]:
-    parsed = urlparse(alert_url)
-    if parsed.scheme != "https" or not parsed.hostname:
-        return {"error": "Splunk alert URL must use https and include a host"}
-    if not ALLOWED_HOSTS or parsed.hostname.lower() not in ALLOWED_HOSTS:
-        return {"error": "Splunk alert URL host is not allowed by platform policy"}
-    sid_values = parse_qs(parsed.query).get("sid", [])
-    if len(sid_values) != 1 or _validate_sid(sid_values[0]):
-        return {"error": "Splunk alert URL must contain one valid sid parameter"}
-    path_parts = [part for part in parsed.path.split("/") if part]
-    app_index = path_parts.index("app") + 1 if "app" in path_parts else len(path_parts)
-    app = path_parts[app_index] if app_index < len(path_parts) else ""
-    return {
-        "provider": "splunk",
-        "host": parsed.hostname.lower(),
-        "app": app,
-        "sid": sid_values[0],
-        "url": alert_url,
-    }
-
-
 def _project_job_metadata(payload: dict[str, Any], sid: str) -> dict[str, Any]:
     entries = payload.get("entry")
     entry = entries[0] if isinstance(entries, list) and entries and isinstance(entries[0], dict) else {}
@@ -332,43 +288,6 @@ def _project_job_metadata(payload: dict[str, Any], sid: str) -> dict[str, Any]:
     }
 
 
-def _saved_search_identity(owner: str, app: str, name: str) -> str | None:
-    if not all(_NAMESPACE_RE.fullmatch(value) for value in (owner, app, name)):
-        return None
-    return f"{owner}/{app}/{name}"
-
-
-def _tls_verify() -> bool | str:
-    if not CA_BUNDLE:
-        return True
-    bundle = Path(CA_BUNDLE)
-    if not bundle.is_file():
-        raise ValueError(f"Configured Splunk CA bundle is not mounted: {CA_BUNDLE}")
-    if bundle.stat().st_size == 0:
-        raise ValueError(f"Configured Splunk CA bundle is empty: {CA_BUNDLE}")
-    return str(bundle)
-
-
-def _project_saved_search(payload: dict[str, Any], owner: str, app: str, name: str) -> dict[str, Any]:
-    entries = payload.get("entry")
-    entry = entries[0] if isinstance(entries, list) and entries and isinstance(entries[0], dict) else {}
-    content = entry.get("content") if isinstance(entry.get("content"), dict) else {}
-    return {
-        "provider": "splunk",
-        "identity": {"owner": owner, "app": app, "name": name},
-        "description": str(content.get("description") or ""),
-        "search": str(content.get("search") or ""),
-        "disabled": bool(content.get("disabled")),
-        "cron_schedule": str(content.get("cron_schedule") or ""),
-        "dispatch_earliest_time": str(content.get("dispatch.earliest_time") or ""),
-        "dispatch_latest_time": str(content.get("dispatch.latest_time") or ""),
-        "alert_type": str(content.get("alert_type") or ""),
-        "alert_comparator": str(content.get("alert_comparator") or ""),
-        "alert_threshold": str(content.get("alert_threshold") or ""),
-        "actions": str(content.get("actions") or ""),
-    }
-
-
 def _splunk_request(method: str, endpoint: str, **kwargs: Any) -> dict[str, Any]:
     request_headers = kwargs.pop("headers")
     try:
@@ -376,19 +295,12 @@ def _splunk_request(method: str, endpoint: str, **kwargs: Any) -> dict[str, Any]
             require_header(headers=request_headers, header_name="x-splunk-base-url", description="Splunk base URL"),
             header_name="x-splunk-base-url",
         )
-        hostname = (urlparse(base_url).hostname or "").lower()
-        if not ALLOWED_HOSTS or hostname not in ALLOWED_HOSTS:
-            return {"error": "Splunk base URL host is not allowed by platform policy"}
     except ValueError as exc:
         return {"error": str(exc)}
 
     url = f"{base_url}{endpoint}"
     try:
-        verify = _tls_verify()
-    except (OSError, ValueError) as exc:
-        return {"error": str(exc)}
-    try:
-        with httpx.Client(timeout=60.0, verify=verify) as client:
+        with httpx.Client(timeout=60.0) as client:
             try:
                 auth_headers = _build_auth_headers(client, base_url, request_headers)
             except ValueError as exc:
@@ -417,8 +329,7 @@ def _splunk_request(method: str, endpoint: str, **kwargs: Any) -> dict[str, Any]
 def search_logs(
     query: Annotated[
         str,
-        "One bounded SPL query with an explicit allowed index and a provider-derived request/session/signature pivot; "
-        "do not invent terms from the alert title.",
+        "Plain search text or a bounded SPL query. Use exact provider-derived identifiers when available.",
     ],
     earliest: Annotated[
         str | None,
@@ -433,12 +344,16 @@ def search_logs(
     max_results: Annotated[int, "Maximum number of results to return."] = 100,
     headers: dict[str, str] = CurrentHeaders(),
 ) -> dict[str, Any]:
-    """Run at most one justified follow-up SPL query after exact finalized alert results supply a stable pivot."""
-    search_query = query if query.startswith("search") else f"search {query}"
+    """Search Splunk with text or SPL over an optional bounded time window."""
+    search_query = query.strip()
+    if not search_query:
+        return {"error": "Splunk search query must not be empty"}
+    if not search_query.startswith("|") and not re.match(r"(?i)^search(?:\s|$)", search_query):
+        search_query = f"search {search_query}"
     validation_error = _validate_splunk_query(search_query)
     if validation_error:
         return {"error": validation_error}
-    effective_earliest = earliest or "-1h"
+    effective_earliest = earliest or "-15m"
     effective_latest = latest or "now"
     time_error = _validate_time_range(effective_earliest, effective_latest)
     if time_error:
@@ -468,20 +383,10 @@ def search_logs(
     )
 
 
-@mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": False})
-def parse_alert_url(
-    alert_url: Annotated[str, "Full Splunk alert/search URL containing a sid query parameter."],
-) -> dict[str, Any]:
-    """Validate an alert URL against platform policy and extract its dispatch ID without network access."""
-    return _parse_alert_url(alert_url)
-
-
-@mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": False})
-def get_search_job(
-    sid: Annotated[str, "Splunk search job dispatch ID."],
+def _get_search_job(
+    sid: str,
     headers: dict[str, str] = CurrentHeaders(),
 ) -> dict[str, Any]:
-    """Retrieve this exact alert dispatch first, without reconstructing the search."""
     validation_error = _validate_sid(sid)
     if validation_error:
         return {"error": validation_error}
@@ -498,12 +403,15 @@ def get_search_job(
 
 @mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": False})
 def get_search_results(
-    sid: Annotated[str, "Splunk search job dispatch ID."],
+    sid: Annotated[
+        str,
+        "Splunk search job dispatch ID (sid) returned when Splunk runs a search or scheduled alert.",
+    ],
     max_results: Annotated[int, "Maximum finalized results to retrieve and compact."] = 100,
     headers: dict[str, str] = CurrentHeaders(),
 ) -> dict[str, Any]:
-    """Return compact evidence only from this exact finalized alert job; stop on unavailable or non-final jobs."""
-    job = get_search_job(sid, headers=headers)
+    """Retrieve metadata and compact results for one finalized Splunk search job."""
+    job = _get_search_job(sid, headers=headers)
     if "error" in job:
         return job
     if not job["is_done"] or job["is_failed"]:
@@ -526,84 +434,6 @@ def get_search_results(
     evidence["job"] = {key: value for key, value in job.items() if key != "search"}
     evidence["finalized"] = True
     return evidence
-
-
-@mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": False})
-def run_saved_search(
-    name: Annotated[str, "Platform-configured saved-search name."],
-    earliest: Annotated[str, "Bounded earliest time, such as -1h or an ISO timestamp."] = "-1h",
-    latest: Annotated[str, "Bounded latest time, such as now or an ISO timestamp."] = "now",
-    max_results: Annotated[int, "Maximum results to group and summarize."] = 100,
-    headers: dict[str, str] = CurrentHeaders(),
-) -> dict[str, Any]:
-    """Run one configured saved search over a bounded window and return compact occurrence statistics."""
-    identity = SAVED_SEARCHES.get(name)
-    if identity is None:
-        return {"error": "Splunk saved search is not configured by platform policy"}
-    try:
-        owner, app, saved_name = identity.split("/", 2)
-    except ValueError:
-        return {"error": "Configured Splunk saved-search identity must use owner/app/name syntax"}
-    if _saved_search_identity(owner, app, saved_name) is None:
-        return {"error": "Configured Splunk saved-search identity has invalid syntax"}
-    time_error = _validate_time_range(earliest, latest)
-    if time_error:
-        return {"error": time_error}
-
-    definition_response = _splunk_request(
-        "GET",
-        f"/servicesNS/{quote(owner, safe='')}/{quote(app, safe='')}/saved/searches/{quote(saved_name, safe='')}",
-        headers=headers,
-        params={"output_mode": "json"},
-    )
-    if "error" in definition_response:
-        return definition_response
-    definition = _project_saved_search(definition_response, owner, app, saved_name)
-    search_query = str(definition.get("search") or "")
-    search_query = search_query if search_query.startswith("search") else f"search {search_query}"
-    query_error = _validate_splunk_query(search_query)
-    if query_error:
-        return {"error": query_error}
-
-    response = _splunk_request(
-        "GET",
-        "/services/search/jobs/export",
-        headers=headers,
-        params={
-            "search": search_query,
-            "exec_mode": "oneshot",
-            "output_mode": "json",
-            "count": max(1, min(max_results, MAX_QUERY_RESULTS)),
-            "earliest_time": earliest,
-            "latest_time": latest,
-        },
-    )
-    if "error" in response:
-        return response
-    evidence = compact_splunk_evidence(
-        response,
-        query=search_query,
-        earliest=earliest,
-        latest=latest,
-    )
-    evidence["saved_search"] = {"alias": name, **definition["identity"]}
-    return fit_evidence_budget(evidence, MAX_EVIDENCE_BYTES)
-
-
-@mcp.tool(annotations={"readOnlyHint": True, "openWorldHint": False})
-def get_alert_events(
-    alert_name: Annotated[str, "Alert name to look up in Splunk fired alerts."],
-    count: Annotated[int, "Maximum number of recent alert events to return."] = 10,
-    headers: dict[str, str] = CurrentHeaders(),
-) -> dict[str, Any]:
-    """Use this when you need recent fired-alert entries for a known Splunk alert name."""
-    endpoint = f"/servicesNS/-/-/alerts/fired_alerts/{quote(alert_name, safe='')}"
-    return _splunk_request(
-        "GET",
-        endpoint,
-        headers=headers,
-        params={"output_mode": "json", "count": count},
-    )
 
 
 @mcp.custom_route("/health", methods=["GET"])

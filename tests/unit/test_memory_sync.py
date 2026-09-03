@@ -29,7 +29,7 @@ pytestmark = pytest.mark.unit
 
 def test_volume_name_convention():
     assert _get_volume_name("platform-test") == "agent-memory-platform-test"
-    assert _get_volume_name("incident-investigator") == "agent-memory-incident-investigator"
+    assert _get_volume_name("example-workflow") == "agent-memory-example-workflow"
 
 
 def test_stream_to_bytes_concatenates_chunks():

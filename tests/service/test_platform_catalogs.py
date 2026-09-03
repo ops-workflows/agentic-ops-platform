@@ -64,17 +64,17 @@ async def test_platform_connectors_endpoint_lists_configured_instances(
     config.write_text(
         "connectors:\n"
         "  enabled:\n"
-        "    - sf-intake\n"
+        "    - event-intake\n"
         "  instances:\n"
-        "    sf-intake:\n"
+        "    event-intake:\n"
         "      type: gcp-pubsub\n"
-        "      display_name: SF Intake\n"
+        "      display_name: Event Intake\n"
         "      source:\n"
         "        type: pubsub\n"
         "        subscription: my-sub\n"
         "      target:\n"
-        "        workflow: sf-alerts-investigator\n"
-        "        message_channel: sf-alerts\n",
+        "        workflow: example-workflow\n"
+        "        message_channel: alerts\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(settings, "platform_config_file", str(config))
@@ -84,7 +84,21 @@ async def test_platform_connectors_endpoint_lists_configured_instances(
         assert resp.status_code == 200, resp.text
         connectors = resp.json()
         ids = {c["id"] for c in connectors}
-        assert "sf-intake" in ids
+        assert "event-intake" in ids
+        event_intake = next(connector for connector in connectors if connector["id"] == "event-intake")
+        assert event_intake["paused"] is True
+
+        paused = await client.post("/api/platform/connectors/event-intake/pause")
+        assert paused.status_code == 200, paused.text
+        assert paused.json()["paused"] is True
+
+        listed = await client.get("/api/platform/connectors")
+        event_intake = next(connector for connector in listed.json() if connector["id"] == "event-intake")
+        assert event_intake["paused"] is True
+
+        resumed = await client.post("/api/platform/connectors/event-intake/resume")
+        assert resumed.status_code == 200, resumed.text
+        assert resumed.json()["paused"] is False
 
 
 @pytest.mark.asyncio

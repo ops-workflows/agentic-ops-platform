@@ -72,9 +72,15 @@ CREATE TABLE control_plane.agents (
     config_hash     TEXT,
     repo_path       TEXT,
     provisioned     BOOLEAN DEFAULT FALSE,
-    paused          BOOLEAN NOT NULL DEFAULT FALSE,
+    paused          BOOLEAN NOT NULL DEFAULT TRUE,
     provisioned_at  TIMESTAMPTZ,
     created         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE control_plane.connector_states (
+    connector_id    TEXT PRIMARY KEY,
+    paused          BOOLEAN NOT NULL DEFAULT TRUE,
     updated         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

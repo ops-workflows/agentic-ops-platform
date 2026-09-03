@@ -55,6 +55,21 @@ async def _schedule_job_handler(agent_name: str, schedule_name: str, prompt: str
     logger.info("Schedule fired: agent=%s schedule=%s", agent_name, schedule_name)
 
     async with async_session_factory() as session:
+        result = await session.execute(
+            select(Schedule, Agent.paused)
+            .join(Agent, Schedule.agent_id == Agent.id)
+            .where(Agent.name == agent_name, Schedule.name == schedule_name, Schedule.enabled == True)  # noqa: E712
+        )
+        schedule_row = result.one_or_none()
+        if schedule_row is None:
+            logger.warning("Skipped missing or disabled schedule: agent=%s schedule=%s", agent_name, schedule_name)
+            return
+
+        sched, agent_paused = schedule_row
+        if agent_paused:
+            logger.info("Skipped schedule for paused agent: agent=%s schedule=%s", agent_name, schedule_name)
+            return
+
         task = await create_task(
             session,
             workflow=agent_name,
@@ -67,18 +82,10 @@ async def _schedule_job_handler(agent_name: str, schedule_name: str, prompt: str
             },
         )
 
-        # Update last_run on the schedule
-        result = await session.execute(
-            select(Schedule)
-            .join(Agent, Schedule.agent_id == Agent.id)
-            .where(Agent.name == agent_name, Schedule.name == schedule_name)
-        )
-        sched = result.scalar_one_or_none()
-        if sched:
-            now = datetime.now(UTC)
-            sched.last_run = now
-            sched.next_run = _next_run_at(sched.cron, now)
-            await session.commit()
+        now = datetime.now(UTC)
+        sched.last_run = now
+        sched.next_run = _next_run_at(sched.cron, now)
+        await session.commit()
 
     logger.info("Created scheduled task %s for %s/%s", task.id, agent_name, schedule_name)
 

@@ -55,7 +55,7 @@ If you identified an improvement worth persisting:
 1. **Read the current file** using the Read tool to get the exact current content
 2. **Compose the full updated content** — make the targeted change while preserving everything else
 3. **Submit via `mcp__platform__propose_skill_update`**:
-   - `file_path`: repo-relative path (e.g. `workflows/incident-investigator/skills/splunk-queries/SKILL.md`)
+   - `file_path`: repo-relative path (e.g. `workflows/example-workflow/skills/log-analysis/SKILL.md`)
    - `content`: the complete updated file
    - `title`: concise description of what changed
    - `description`: evidence from this incident + reasoning

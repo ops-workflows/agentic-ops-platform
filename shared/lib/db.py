@@ -54,8 +54,19 @@ async def ensure_runtime_schema() -> None:
         await conn.execute(text("ALTER TABLE control_plane.approvals ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ"))
         await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_tasks_archived_at ON task_queue.tasks (archived_at)"))
         await conn.execute(
-            text("ALTER TABLE control_plane.agents ADD COLUMN IF NOT EXISTS paused BOOLEAN NOT NULL DEFAULT FALSE")
+            text("ALTER TABLE control_plane.agents ADD COLUMN IF NOT EXISTS paused BOOLEAN NOT NULL DEFAULT TRUE")
         )
+        await conn.execute(text("ALTER TABLE control_plane.agents ALTER COLUMN paused SET DEFAULT TRUE"))
+        await conn.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS control_plane.connector_states ("
+                "connector_id TEXT PRIMARY KEY, "
+                "paused BOOLEAN NOT NULL DEFAULT TRUE, "
+                "updated TIMESTAMPTZ NOT NULL DEFAULT now()"
+                ")"
+            )
+        )
+        await conn.execute(text("ALTER TABLE control_plane.connector_states ALTER COLUMN paused SET DEFAULT TRUE"))
         await conn.execute(text("ALTER TABLE control_plane.session_events DROP COLUMN IF EXISTS artifact_key"))
         await conn.execute(
             text(

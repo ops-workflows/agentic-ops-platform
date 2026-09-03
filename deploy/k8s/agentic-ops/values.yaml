@@ -116,8 +116,6 @@ knowledgeMcp:
 controlPlaneUi:
   replicas: 1
   port: 3000
-  env:
-    NEXT_PUBLIC_API_URL: http://agentic-ops-gateway:8080
 
 mcps:
   message:

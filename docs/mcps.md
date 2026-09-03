@@ -139,25 +139,22 @@ No `mcps.config` fields. Auth/context via `x-jira-base-url`, `x-jira-project`,
 ### `splunk`
 
 Read-only. Auth via `Authorization: Bearer`, `x-splunk-token`, or
-`x-splunk-username` + `x-splunk-password` (exchanged for a session cookie).
+`x-splunk-username` + `x-splunk-password`. Username/password is exchanged for
+`Authorization: Splunk` by default; set `mcps.config.splunk.session_cookie_name`
+when the deployment instead requires the session key in a named cookie.
 Credentials and `x-splunk-base-url` are supplied by each workflow's MCP request
-headers. Configure `allowed_hosts`, `allowed_indexes`,
-`max_results`, and `max_query_chars` under
-`mcps.config.splunk`; `max_window_hours` defaults to 24. Requests fail closed
-without host and index policy. `saved_searches` maps stable tool aliases to
-explicit `owner/app/name` identities for intentional bounded investigations.
-Alert handling parses the `sid` from the alert URL and retrieves that exact
-finalized job; expired jobs are not reconstructed. `max_evidence_bytes`
-defaults to 65536 and bounds the complete compact response.
+headers. `search_logs` accepts text or SPL and defaults to the last 15 minutes
+when no time window is supplied. Configure `max_results` and `max_query_chars`
+under `mcps.config.splunk`;
+`max_window_hours` defaults to 24. `get_search_results` accepts a Splunk search
+job dispatch ID (`sid`) and retrieves its metadata and finalized results in one
+tool call. `max_evidence_bytes` defaults to 65536 and bounds the complete
+compact response.
 
 | Tool | Purpose |
 | --- | --- |
-| `search_logs` | Run bounded safe SPL and return compact redacted occurrence summaries. |
-| `parse_alert_url` | Validate an approved Splunk alert URL and extract its `sid`. |
-| `get_search_job` | Retrieve projected dispatch state, timing, query, and counts. |
-| `get_search_results` | Retrieve compact evidence from finalized `sid` results only. |
-| `run_saved_search` | Dispatch an allowlisted saved-search alias in a bounded window and return compact evidence. |
-| `get_alert_events` | Recent fired-alert entries for a Splunk alert. |
+| `search_logs` | Search with text or SPL over an optional bounded window and return compact redacted evidence. |
+| `get_search_results` | Retrieve metadata and compact results for one finalized Splunk search job `sid`. |
 
 ### `cloudwatch`
 

@@ -60,7 +60,7 @@ set-platform-secret: ## Encrypt a secret in the configured platform-config.yaml
 	@$(MAKE) sync
 
 set-workflow-secret: ## Encrypt a secret in WORKFLOW=<workflow>/agent.yaml
-	@test -n "$(WORKFLOW)" || (echo "Set WORKFLOW, for example: make set-workflow-secret WORKFLOW=online-alerts-investigator" >&2; exit 1)
+	@test -n "$(WORKFLOW)" || (echo "Set WORKFLOW, for example: make set-workflow-secret WORKFLOW=example-workflow" >&2; exit 1)
 	@test -n "$(HOST_WORKFLOW_REPO_PATH)" || (echo "HOST_WORKFLOW_REPO_PATH is not configured; run make bootstrap." >&2; exit 1)
 	@test -f "$(HOST_WORKFLOW_REPO_PATH)/workflows/$(WORKFLOW)/agent.yaml" || (echo "Workflow not found: $(HOST_WORKFLOW_REPO_PATH)/workflows/$(WORKFLOW)/agent.yaml" >&2; exit 1)
 	@AGE_IDENTITY="$(AGE_IDENTITY)" $(PYTHON) scripts/set_secret.py \
@@ -73,7 +73,9 @@ help: ## Show available targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*## "}; {printf "%-28s %s\n", $$1, $$2}'
 
 compose-build: ## Build all docker compose services
-	$(COMPOSE) build
+	@profiles="$$(HOST_PLATFORM_CONFIG_FILE="$(HOST_PLATFORM_CONFIG_FILE)" $(PYTHON) scripts/compose_profiles.py)"; \
+	echo "Computed COMPOSE_PROFILES=$$profiles"; \
+	COMPOSE_PROFILES="$$profiles" $(COMPOSE) build
 
 runtime-build: ## Build the runtime container image
 	$(RUNTIME_BUILD) -t $(RUNTIME_IMAGE) -f runtime/Dockerfile .
@@ -86,7 +88,7 @@ build: runtime-build compose-build ## Build all docker images
 up: ## Start the local Compose stack with profiles derived from platform-config.yaml
 	@profiles="$$(HOST_PLATFORM_CONFIG_FILE="$(HOST_PLATFORM_CONFIG_FILE)" $(PYTHON) scripts/compose_profiles.py)"; \
 	echo "Computed COMPOSE_PROFILES=$$profiles"; \
-	SANDBOX_MODE=$(SANDBOX_MODE) COMPOSE_PROFILES="$$profiles" $(COMPOSE) up -d
+	COMPOSE_PROFILES="$$profiles" $(COMPOSE) up -d
 
 down: ## Stop the local docker compose stack
 	$(COMPOSE) down

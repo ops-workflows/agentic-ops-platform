@@ -1,9 +1,4 @@
-"""ServiceNow Connector — polls for new incidents and creates investigation tasks.
-
-Polls the ServiceNow REST API (Table API) for new incidents matching a filter
-query. Each new incident becomes a task in the Postgres task queue targeting the
-incident-investigator workflow.
-"""
+"""Generic ServiceNow Table API connector for creating workflow tasks."""
 
 from __future__ import annotations
 
@@ -17,7 +12,11 @@ from typing import Any
 import httpx
 
 from shared.lib.crypto import decrypt_agent_secrets
-from shared.lib.platform_secrets import apply_platform_env_defaults, load_connector_instance
+from shared.lib.platform_secrets import (
+    apply_platform_env_defaults,
+    load_connector_instance,
+    load_enabled_connector_instance,
+)
 from shared.lib.workflow_paths import find_workflow_package
 
 logging.basicConfig(
@@ -47,12 +46,32 @@ def _bootstrap_platform_env() -> None:
 
 def _load_instance_config() -> dict:
     instance_id = os.environ.get("CONNECTOR_INSTANCE_ID", "").strip()
-    if not instance_id:
-        raise RuntimeError("CONNECTOR_INSTANCE_ID must be set to a connectors.instances entry in platform config")
-    config = load_connector_instance(_platform_config_file(), instance_id)
+    if instance_id:
+        config = load_connector_instance(_platform_config_file(), instance_id)
+    else:
+        instance_id, config = load_enabled_connector_instance(_platform_config_file(), "servicenow")
     if not config:
-        raise RuntimeError(f"Connector instance {instance_id!r} not found in {_platform_config_file()}")
-    return config
+        raise RuntimeError("Set CONNECTOR_INSTANCE_ID or enable exactly one servicenow instance in platform config")
+    source = config.get("source") if isinstance(config.get("source"), dict) else {}
+    target = config.get("target") if isinstance(config.get("target"), dict) else {}
+    if not str(source.get("table") or "").strip():
+        raise RuntimeError("ServiceNow connector source.table must be configured")
+    if not str(target.get("workflow") or "").strip():
+        raise RuntimeError("ServiceNow connector target.workflow must be configured")
+    if not str(target.get("prompt_template") or "").strip():
+        raise RuntimeError("ServiceNow connector target.prompt_template must be configured")
+    coalescing = config.get("coalescing") if isinstance(config.get("coalescing"), dict) else {}
+    if coalescing.get("enabled") and not str(coalescing.get("key_field") or "").strip():
+        raise RuntimeError("ServiceNow connector coalescing.key_field must be configured when coalescing is enabled")
+    return {**config, "_instance_id": instance_id}
+
+
+async def _connector_is_paused(connector_id: str) -> bool:
+    from shared.lib.connector_state import connector_is_paused
+    from shared.lib.db import async_session_factory
+
+    async with async_session_factory() as session:
+        return await connector_is_paused(session, connector_id)
 
 
 def _load_target_workflow_env(config: dict) -> dict[str, str]:
@@ -99,8 +118,8 @@ def _extract_nested(data: dict, dot_path: str) -> Any:
     return current
 
 
-def _parse_incident(record: dict, config: dict) -> dict[str, Any]:
-    """Parse a ServiceNow incident record using the instance parsing.extract config."""
+def _parse_record(record: dict, config: dict) -> dict[str, Any]:
+    """Parse a ServiceNow record using the instance extraction mapping."""
     extract_config = config.get("parsing", {}).get("extract", {})
     parsed: dict[str, Any] = {}
     for field, path in extract_config.items():
@@ -109,43 +128,20 @@ def _parse_incident(record: dict, config: dict) -> dict[str, Any]:
     return parsed
 
 
-def _build_prompt(parsed: dict) -> str:
-    """Build the investigation prompt for the incident-investigator workflow."""
-    incident_id = parsed.get("incident_id", "unknown")
-    severity = parsed.get("severity", "unknown")
-    service = parsed.get("service", "unknown")
-    customer = parsed.get("customer", "unknown")
-    description = parsed.get("description", "")
-    subscription_id = parsed.get("subscription_id", "")
-    order_id = parsed.get("order_id", "")
-    customer_id = parsed.get("customer_id", "")
-    error_code = parsed.get("error_code", "")
-
-    prompt = (
-        f"Investigate ServiceNow incident {incident_id}.\n\n"
-        f"Priority: {severity}\n"
-        f"Service: {service}\n"
-        f"Customer: {customer}\n"
-    )
-    if subscription_id:
-        prompt += f"Subscription ID: {subscription_id}\n"
-    if order_id:
-        prompt += f"Order ID: {order_id}\n"
-    if customer_id:
-        prompt += f"Customer/Business ID: {customer_id}\n"
-    if error_code:
-        prompt += f"Error Code: {error_code}\n"
-    prompt += (
-        f"\nDescription:\n{description}\n\n"
-        f"Triage this incident: extract identifiers, classify whether log analysis "
-        f"and/or CRM lookup are needed, check Hindsight for similar past incidents, "
-        f"run the appropriate analysis, and produce an RCA with confidence score."
-    )
-    return prompt
+class _SafeFormatMap(dict):
+    def __missing__(self, key: str) -> str:
+        return ""
 
 
-async def _create_task_from_incident(parsed: dict, config: dict) -> None:
-    """Create a task in Postgres from a parsed ServiceNow incident."""
+def _build_prompt(parsed: dict, config: dict) -> str:
+    target = config.get("target") if isinstance(config.get("target"), dict) else {}
+    template = str(target.get("prompt_template") or "")
+    values = _SafeFormatMap({key: "" if value is None else str(value) for key, value in parsed.items()})
+    return template.format_map(values)
+
+
+async def _create_task_from_record(parsed: dict, config: dict) -> None:
+    """Create a task in Postgres from a parsed ServiceNow record."""
     from shared.lib.db import async_session_factory
     from shared.lib.task_queue import create_task
 
@@ -155,50 +151,33 @@ async def _create_task_from_incident(parsed: dict, config: dict) -> None:
     coalesce_key = None
     coalesce_window = 300
     if coalescing.get("enabled"):
-        key_field = coalescing.get("key_field", "incident_id")
-        coalesce_key = f"{target.get('workflow', 'incident-investigator')}:{parsed.get(key_field, 'unknown')}"
+        key_field = str(coalescing["key_field"])
+        coalesce_key = f"{target['workflow']}:{parsed.get(key_field, 'unknown')}"
         coalesce_window = coalescing.get("window_sec", 300)
 
-    prompt = _build_prompt(parsed)
+    prompt = _build_prompt(parsed, config)
+    metadata = {**parsed, "source": "servicenow-connector"}
 
     async with async_session_factory() as session:
         task = await create_task(
             session,
-            workflow=target.get("workflow", "incident-investigator"),
+            workflow=target["workflow"],
             prompt=prompt,
-            channel="servicenow",
-            metadata={
-                "source": "servicenow-connector",
-                "incident_id": parsed.get("incident_id"),
-                "severity": parsed.get("severity"),
-                "service": parsed.get("service"),
-                "customer": parsed.get("customer"),
-                "subscription_id": parsed.get("subscription_id"),
-                "order_id": parsed.get("order_id"),
-                "customer_id": parsed.get("customer_id"),
-                "error_code": parsed.get("error_code"),
-                "description": parsed.get("description"),
-                "raw_record": parsed.get("raw_record", ""),
-            },
+            channel=str(target.get("channel") or "servicenow"),
+            metadata=metadata,
             coalesce_key=coalesce_key,
             coalesce_window_sec=coalesce_window,
         )
-        logger.info(
-            "Created task %s from ServiceNow incident %s (P%s, service=%s)",
-            task.id,
-            parsed.get("incident_id"),
-            parsed.get("severity"),
-            parsed.get("service"),
-        )
+        logger.info("Created task %s from ServiceNow record", task.id)
 
 
 async def run_polling_consumer(config: dict) -> None:
-    """Poll ServiceNow Table API for new incidents."""
+    """Poll the configured ServiceNow Table API for new records."""
     source = config.get("source", {})
     workflow_env = _load_target_workflow_env(config)
     instance_url = workflow_env.get("SERVICENOW_INSTANCE_URL", "")
-    table = source.get("table", "incident")
-    query = source.get("query", "state=1^priority<=3")
+    table = str(source["table"])
+    query = str(source.get("query") or "")
     fields = source.get("fields", [])
     interval = source.get("interval_sec", 60)
 
@@ -212,7 +191,7 @@ async def run_polling_consumer(config: dict) -> None:
         logger.error("SERVICENOW_USERNAME and SERVICENOW_PASSWORD must be configured")
         return
 
-    # Track already-processed incidents to avoid duplicates
+    # Track already-processed records to avoid duplicates
     seen_sys_ids: set[str] = set()
 
     api_url = f"{instance_url.rstrip('/')}/api/now/table/{table}"
@@ -232,6 +211,9 @@ async def run_polling_consumer(config: dict) -> None:
         timeout=30.0,
     ) as client:
         while not _shutdown:
+            if await _connector_is_paused(str(config.get("_instance_id") or "")):
+                await asyncio.sleep(interval)
+                continue
             try:
                 resp = await client.get(api_url, params=params)
                 resp.raise_for_status()
@@ -245,12 +227,12 @@ async def run_polling_consumer(config: dict) -> None:
                         continue
                     seen_sys_ids.add(sys_id)
 
-                    parsed = _parse_incident(record, config)
-                    await _create_task_from_incident(parsed, config)
+                    parsed = _parse_record(record, config)
+                    await _create_task_from_record(parsed, config)
                     new_count += 1
 
                 if new_count:
-                    logger.info("Processed %d new incidents from ServiceNow", new_count)
+                    logger.info("Processed %d new records from ServiceNow", new_count)
 
                 # Prevent unbounded memory growth — keep only recent IDs
                 if len(seen_sys_ids) > 10000:

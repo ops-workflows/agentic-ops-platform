@@ -163,7 +163,13 @@ class GatewayMessageIngress:
         self._bot_user_id = ""
         self._routes: list[MessageRoute] = []
 
+    @property
+    def running(self) -> bool:
+        return self._listener_task is not None and not self._listener_task.done()
+
     async def start(self) -> None:
+        if self.running:
+            return
         provider = settings.message_bus.provider
         if provider not in {"mattermost", "slack"}:
             logger.warning("Message ingress disabled for unsupported provider %s", provider)
@@ -205,6 +211,7 @@ class GatewayMessageIngress:
             client=self._client,
             handle_event=self.handle_event,
         )
+        self._stop_event = asyncio.Event()
         self._listener_task = asyncio.create_task(listener.run(self._stop_event), name=f"{provider}-message-ingress")
 
     async def _resolve_route_channels(self, provider: str) -> list[MessageRoute]:
@@ -241,12 +248,22 @@ class GatewayMessageIngress:
                 resolved_routes.append(replace(route, channel=channel_id.lower()))
         return resolved_routes
 
-    async def stop(self) -> None:
+    async def pause(self) -> None:
+        await self._stop_listener()
+
+    async def resume(self) -> None:
+        await self.start()
+
+    async def _stop_listener(self) -> None:
         self._stop_event.set()
         if self._listener_task is not None:
             self._listener_task.cancel()
             with suppress(asyncio.CancelledError):
                 await self._listener_task
+            self._listener_task = None
+
+    async def stop(self) -> None:
+        await self._stop_listener()
         await self._client.aclose()
 
     async def handle_event(self, event: MessageEvent) -> None:

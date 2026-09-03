@@ -25,7 +25,8 @@ from gateway.message import router as message_router
 from gateway.message_ingress import GatewayMessageIngress
 from gateway.provisioner import run_provisioner_scan
 from gateway.scheduler import start_scheduler, stop_scheduler
-from shared.lib.db import ensure_runtime_schema
+from shared.lib.connector_state import MESSAGE_INGRESS_CONNECTOR_ID, connector_is_paused
+from shared.lib.db import async_session_factory, ensure_runtime_schema
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,7 +45,12 @@ async def lifespan(app: FastAPI):
     # Start APScheduler (reads cron from agent.yaml)
     await start_scheduler()
     message_ingress = GatewayMessageIngress()
-    await message_ingress.start()
+    async with async_session_factory() as session:
+        message_ingress_paused = await connector_is_paused(session, MESSAGE_INGRESS_CONNECTOR_ID)
+    if message_ingress_paused:
+        logger.info("Message ingress is paused")
+    else:
+        await message_ingress.start()
     app.state.message_ingress = message_ingress
     logger.info("Gateway ready")
     yield

@@ -112,13 +112,27 @@ class Agent(Base):
     config_hash: Mapped[str | None] = mapped_column(Text)
     repo_path: Mapped[str | None] = mapped_column(Text)
     provisioned: Mapped[bool] = mapped_column(Boolean, default=False)
-    paused: Mapped[bool] = mapped_column(Boolean, default=False)
+    paused: Mapped[bool] = mapped_column(Boolean, default=True)
     provisioned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     updated: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
     sessions: Mapped[list[Session]] = relationship("Session", back_populates="agent")
     schedules: Mapped[list[Schedule]] = relationship("Schedule", back_populates="agent", cascade="all, delete-orphan")
+
+
+class ConnectorState(Base):
+    __tablename__ = "connector_states"
+    __table_args__ = {"schema": "control_plane"}
+
+    connector_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    updated: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("now()"),
+        onupdate=text("now()"),
+    )
 
 
 class Session(Base):

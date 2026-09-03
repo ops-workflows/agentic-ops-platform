@@ -20,10 +20,10 @@ is a small, generic service that reads from one external source and calls
   process environment via `${VAR}` placeholders, expanded at load time
   (`shared/lib/platform_secrets.py`). The connector reads its instance with
   `load_connector_instance(path, instance_id)`.
-- **Reference `connector.yaml`.** Each connector directory ships a
-  `connector.yaml` as a documentation-only example of its instance schema; it
-  is **not** read at runtime. Live config always comes from
-  `platform-config.yaml` via `CONNECTOR_INSTANCE_ID`.
+- **One configuration source.** Connector directories contain implementation
+  code, not instance configuration. Available fields and generic examples are
+  documented below; live config always comes from `platform-config.yaml` via
+  `CONNECTOR_INSTANCE_ID`.
 
 ## Configuring an instance
 
@@ -40,17 +40,17 @@ Every instance shares four sections; each connector defines what goes inside:
 ```yaml
 connectors:
   enabled:
-    - sf-alert-email-intake      # instance ids surfaced in the catalog
+    - event-intake               # instance ids surfaced in the catalog
   instances:
-    sf-alert-email-intake:
+    event-intake:
       type: gcp-pubsub           # which connector implementation runs it
-      display_name: Salesforce Alert Email Intake
+      display_name: Event Intake
       source:
         type: pubsub
         project: ${GCP_PROJECT}
         subscription: ${GCP_PUBSUB_SUBSCRIPTION}
       target:
-        workflow: sf-alerts-investigator
+        workflow: example-workflow
       parsing:
         format: json
         extract:
@@ -61,6 +61,22 @@ connectors:
         window_sec: 300
         key_field: object
 ```
+
+## Pause and resume
+
+The control-plane Connectors page can pause or resume each configured connector.
+State is persisted in PostgreSQL and is independent for every deployment.
+Pausing Pub/Sub stops streaming pull; messages that observe paused state at
+admission are nacked for redelivery. Work already past that check can finish.
+Pausing a polling connector stops subsequent provider requests. This differs
+from pausing a workflow, which leaves ingestion active and only prevents queued
+tasks from starting.
+
+The configured message provider also appears as the platform-owned `message-ingress`
+connector. Pausing it stops the Mattermost WebSocket or Slack Socket Mode listener;
+resuming it creates a new listener without restarting Gateway. Outbound workflow
+messages and the signed approval callback are not connector ingestion and remain
+available.
 
 ## Available connectors
 
@@ -145,31 +161,34 @@ source:
     - priority
     - caller_id
 target:
-  workflow: incident-investigator
+  workflow: example-workflow
+  channel: servicenow
+  prompt_template: |
+    Process ServiceNow record {record_id}.
+    Description: {description}
 parsing:
   format: json
   extract:                                     # dot-path extraction; supports "field.display_value"
-    incident_id: "number"
-    severity: "priority"
-    service: "cmdb_ci.display_value"
-    customer: "caller_id.display_value"
+    record_id: "number"
     description: "description"
 coalescing:
   enabled: true
   window_sec: 300
-  key_field: incident_id
+  key_field: record_id
 ```
 
 Notes: requests use `sysparm_display_value=true` so `extract` can read
 `<field>.display_value`. The target workflow's `agent.yaml` supplies
 `SERVICENOW_INSTANCE_URL` under `env` and encrypted `SERVICENOW_USERNAME` /
 `SERVICENOW_PASSWORD` entries under `secrets`. Polling, parsing, and coalescing
-behavior remains in the platform connector instance.
+behavior remains in the platform connector instance. When exactly one enabled
+instance has `type: servicenow`, the connector selects it automatically;
+`SERVICENOW_CONNECTOR_INSTANCE_ID` can select an instance explicitly.
 
 ## Adding a new connector implementation
 
-1. Create a directory under `connectors/` with a `Dockerfile` and `main.py`
-   (a `connector.yaml` example is conventional but optional).
+1. Create a directory under `connectors/` with a `Dockerfile` and `main.py`, and
+  document its instance fields and a generic example in this guide.
 2. In `main.py`: resolve `CONNECTOR_INSTANCE_ID`, load the instance with
    `load_connector_instance(...)`, read from the source using the instance
    config, and enqueue tasks via `shared.lib.task_queue.create_task()`.

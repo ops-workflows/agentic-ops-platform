@@ -8,11 +8,13 @@ models — without any HTTP calls.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from textwrap import dedent
+from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from gateway.api import (
+    ConnectorResponse,
     _connector_source_label,
     _enabled_catalog_ids,
     _extract_hindsight_entries,
@@ -20,8 +22,10 @@ from gateway.api import (
     _is_text_memory_file,
     _read_connectors_catalog,
     _read_mcp_catalog,
+    _set_platform_connector_paused,
 )
 from mcps.core import mcp_memory
+from shared.lib.connector_state import MESSAGE_INGRESS_CONNECTOR_ID
 
 pytestmark = pytest.mark.unit
 
@@ -31,32 +35,22 @@ pytestmark = pytest.mark.unit
 
 def _write_connectors_config(tmp_path) -> str:
     config = tmp_path / "platform-config.yaml"
-    config.write_text(
-        dedent(
-            """
-            connectors:
-              enabled:
-                - sf-intake
-              instances:
-                sf-intake:
-                  type: gcp-pubsub
-                  display_name: SF Intake
-                  source:
-                    type: pubsub
-                    subscription: my-sub
-                  target:
-                    workflow: sf-alerts-investigator
-                    message_channel: sf-alerts
-                  metadata:
-                    tags: [GCP, Pub/Sub]
-                disabled-one:
-                  type: servicenow
-                  source:
-                    type: polling
-            """
-        ).lstrip(),
-        encoding="utf-8",
-    )
+    data = {
+        "connectors": {
+            "enabled": ["event-intake"],
+            "instances": {
+                "event-intake": {
+                    "type": "gcp-pubsub",
+                    "display_name": "Event Intake",
+                    "source": {"type": "pubsub", "subscription": "my-sub"},
+                    "target": {"workflow": "example-workflow", "message_channel": "alerts"},
+                    "metadata": {"tags": ["GCP", "Pub/Sub"]},
+                },
+                "disabled-one": {"type": "servicenow", "source": {"type": "polling"}},
+            },
+        }
+    }
+    config.write_text(yaml.safe_dump(data), encoding="utf-8")
     return str(config)
 
 
@@ -67,7 +61,7 @@ def test_read_connectors_catalog_lists_enabled_instances(monkeypatch, tmp_path):
 
     connectors = _read_connectors_catalog()
     ids = {c.id for c in connectors}
-    assert ids == {"sf-intake"}
+    assert ids == {"event-intake"}
 
 
 def test_connector_shape_contains_target_and_tags(monkeypatch, tmp_path):
@@ -75,12 +69,12 @@ def test_connector_shape_contains_target_and_tags(monkeypatch, tmp_path):
 
     monkeypatch.setattr(settings, "platform_config_file", _write_connectors_config(tmp_path))
 
-    connector = next(c for c in _read_connectors_catalog() if c.id == "sf-intake")
-    assert connector.name == "SF Intake"
+    connector = next(c for c in _read_connectors_catalog() if c.id == "event-intake")
+    assert connector.name == "Event Intake"
     assert connector.source_type == "pubsub"
     assert connector.type == "gcp-pubsub"
-    assert connector.target_workflow == "sf-alerts-investigator"
-    assert connector.target_channel == "sf-alerts"
+    assert connector.target_workflow == "example-workflow"
+    assert connector.target_channel == "alerts"
     assert connector.tags == ["GCP", "Pub/Sub"]
 
 
@@ -118,6 +112,56 @@ def test_connector_source_label_from_metadata_override():
 
 def test_connector_source_label_falls_back_to_name():
     assert _connector_source_label({"name": "my-connector"}) == "My Connector"
+
+
+@pytest.mark.asyncio
+async def test_message_ingress_restores_live_state_when_persistence_fails(monkeypatch):
+    from gateway import api as gateway_api
+
+    connector = ConnectorResponse(
+        id=MESSAGE_INGRESS_CONNECTOR_ID,
+        name="Messaging",
+        summary="Message ingress",
+        description=None,
+        source_type="mattermost",
+        source_label="https://mattermost.example.test",
+        target_workflow=None,
+        target_channel=None,
+        tags=["platform"],
+        type="message-ingress",
+    )
+    calls = []
+
+    class Ingress:
+        async def pause(self):
+            calls.append("pause")
+
+        async def resume(self):
+            calls.append("resume")
+
+    class SessionContext:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    async def active(_session, _connector_id):
+        return False
+
+    async def fail_to_persist(_session, _connector_id, *, paused):  # noqa: ARG001
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(gateway_api, "_read_connectors_catalog", lambda: [connector])
+    monkeypatch.setattr(gateway_api, "async_session_factory", SessionContext)
+    monkeypatch.setattr(gateway_api, "connector_is_paused", active)
+    monkeypatch.setattr(gateway_api, "set_connector_paused", fail_to_persist)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(message_ingress=Ingress())))
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await _set_platform_connector_paused(MESSAGE_INGRESS_CONNECTOR_ID, paused=True, request=request)
+
+    assert calls == ["pause", "resume"]
 
 
 # ── Hindsight entry extraction ──────────────────────────────────────────

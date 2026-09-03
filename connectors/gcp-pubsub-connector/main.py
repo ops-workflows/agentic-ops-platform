@@ -58,7 +58,17 @@ def _load_instance_config() -> dict[str, Any]:
         instance_id, config = load_enabled_connector_instance(_platform_config_file(), "gcp-pubsub")
     if not config:
         raise RuntimeError("Set CONNECTOR_INSTANCE_ID or enable exactly one gcp-pubsub instance in platform config")
-    return config
+    return {**config, "_instance_id": instance_id}
+
+
+async def _connector_is_paused(connector_id: str) -> bool:
+    if not connector_id:
+        return True
+    from shared.lib.connector_state import connector_is_paused
+    from shared.lib.db import async_session_factory
+
+    async with async_session_factory() as session:
+        return await connector_is_paused(session, connector_id)
 
 
 def _configure_google_application_credentials() -> None:
@@ -309,6 +319,18 @@ async def _create_task(
         logger.info("Created task %s from Pub/Sub message", task.id)
 
 
+async def _create_task_if_active(
+    payload: dict[str, Any],
+    payload_text: str,
+    attributes: dict[str, str],
+    config: dict[str, Any],
+) -> bool:
+    if await _connector_is_paused(str(config.get("_instance_id") or "")):
+        return False
+    await _create_task(payload, payload_text, attributes, config)
+    return True
+
+
 def _subscriber_callback(loop: asyncio.AbstractEventLoop, config: dict[str, Any]):
     def callback(message) -> None:
         payload, payload_text = _decode_payload(message.data)
@@ -318,9 +340,12 @@ def _subscriber_callback(loop: asyncio.AbstractEventLoop, config: dict[str, Any]
                 message.ack()
                 return
             future = asyncio.run_coroutine_threadsafe(
-                _create_task(payload, payload_text, dict(message.attributes or {}), config), loop
+                _create_task_if_active(payload, payload_text, dict(message.attributes or {}), config), loop
             )
-            future.result()
+            if future.result() is False:
+                logger.info("Nacking Pub/Sub message %s because the connector is paused", message.message_id)
+                message.nack()
+                return
         except Exception as exc:
             logger.exception("Failed to create task from Pub/Sub message %s: %s", message.message_id, exc)
             message.nack()
@@ -330,11 +355,13 @@ def _subscriber_callback(loop: asyncio.AbstractEventLoop, config: dict[str, Any]
     return callback
 
 
-async def _wait_for_subscriber(future) -> None:
+async def _wait_for_subscriber(future, connector_id: str) -> None:
     while not _shutdown:
         if future.done():
             future.result()
             raise RuntimeError("Pub/Sub subscriber stopped unexpectedly")
+        if await _connector_is_paused(connector_id):
+            return
         await asyncio.sleep(1)
 
 
@@ -349,18 +376,27 @@ async def run_subscriber(config: dict[str, Any]) -> None:
     _gcs_payload_allowed({}, config)
 
     project = str(source.get("project") or os.environ.get("GCP_PROJECT") or "").strip()
-    subscriber = pubsub_v1.SubscriberClient()
-    subscription_path = (
-        subscription if subscription.startswith("projects/") else subscriber.subscription_path(project, subscription)
-    )
-
-    logger.info("Starting Pub/Sub subscriber: %s", subscription_path)
-    future = subscriber.subscribe(subscription_path, callback=_subscriber_callback(asyncio.get_running_loop(), config))
-    try:
-        await _wait_for_subscriber(future)
-    finally:
-        future.cancel()
-        subscriber.close()
+    connector_id = str(config.get("_instance_id") or "")
+    while not _shutdown:
+        if await _connector_is_paused(connector_id):
+            await asyncio.sleep(1)
+            continue
+        subscriber = pubsub_v1.SubscriberClient()
+        subscription_path = (
+            subscription
+            if subscription.startswith("projects/")
+            else subscriber.subscription_path(project, subscription)
+        )
+        logger.info("Starting Pub/Sub subscriber: %s", subscription_path)
+        future = subscriber.subscribe(
+            subscription_path,
+            callback=_subscriber_callback(asyncio.get_running_loop(), config),
+        )
+        try:
+            await _wait_for_subscriber(future, connector_id)
+        finally:
+            future.cancel()
+            subscriber.close()
 
 
 def main() -> None:

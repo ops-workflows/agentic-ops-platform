@@ -109,6 +109,7 @@ async def run_provisioner_scan() -> None:
                     config_hash=config_hash,
                     repo_path=repo_path,
                     provisioned=True,
+                    paused=True,
                     provisioned_at=datetime.now(UTC),
                 )
                 session.add(agent)

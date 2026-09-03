@@ -120,7 +120,7 @@ def _backfill_task(task_id: str, *, dry_run: bool) -> tuple[str, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Backfill Hindsight banks from succeeded investigator tasks.")
-    parser.add_argument("--workflow", required=True, help="Workflow name to backfill, e.g. incident-investigator")
+    parser.add_argument("--workflow", required=True, help="Workflow name to backfill, e.g. example-workflow")
     parser.add_argument("--task-id", action="append", default=[], help="Specific task id(s) to backfill")
     parser.add_argument("--dry-run", action="store_true", help="Print what would be retained without writing")
     args = parser.parse_args()

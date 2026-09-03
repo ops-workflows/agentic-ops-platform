@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 
 from gateway.message_ingress import GatewayMessageIngress, match_message_route
@@ -81,7 +83,7 @@ def test_parse_mattermost_rich_webhook_alert() -> None:
         {
             "event": "posted",
             "data": {
-                "channel_name": "online-monitoring",
+                "channel_name": "alerts",
                 "team_id": "team-1",
                 "sender_name": "company-webhooks",
                 "post": {
@@ -117,7 +119,7 @@ def test_parse_mattermost_rich_webhook_alert() -> None:
         message_id="post-1",
         thread_id="post-1",
         channel_id="channel-1",
-        channel_name="online-monitoring",
+        channel_name="alerts",
         team_id="team-1",
         team_name="",
         user_id="webhook-user-1",
@@ -373,7 +375,7 @@ async def test_gateway_filters_reply_before_fetching_thread(monkeypatch) -> None
     monkeypatch.setattr(ingress, "_record_question_reply", not_a_question_reply)
     ingress._routes = [
         MessageRoute(
-            workflow="incident-investigator",
+            workflow="example-workflow",
             channel="operations",
             trigger_words=("@agent",),
         )
@@ -441,7 +443,7 @@ def test_match_message_route_requires_configured_channel_and_trigger() -> None:
         text="@ops investigate this",
     )
     routes = [
-        MessageRoute(workflow="incident-investigator", channel="operations", trigger_words=("@ops",)),
+        MessageRoute(workflow="example-workflow", channel="operations", trigger_words=("@ops",)),
         MessageRoute(workflow="other", channel="operations", trigger_words=("@other",)),
     ]
 
@@ -455,7 +457,7 @@ def test_match_message_route_accepts_trusted_production_webhook() -> None:
         message_id="post-1",
         thread_id="post-1",
         channel_id="channel-1",
-        channel_name="online-monitoring",
+        channel_name="alerts",
         team_id="team-1",
         team_name="company",
         user_id="user-1",
@@ -466,8 +468,8 @@ def test_match_message_route_accepts_trusted_production_webhook() -> None:
         webhook_name="AWS CloudWatch",
     )
     route = MessageRoute(
-        workflow="online-alerts-investigator",
-        channel="online-monitoring",
+        workflow="alert-triage",
+        channel="alerts",
         rule_id="production-alarm",
         provider="mattermost",
         priority=100,
@@ -487,8 +489,8 @@ def test_match_message_route_accepts_trusted_production_webhook() -> None:
 
 def test_match_message_route_rejects_untrusted_or_nonproduction_webhook() -> None:
     trusted_route = MessageRoute(
-        workflow="online-alerts-investigator",
-        channel="online-monitoring",
+        workflow="alert-triage",
+        channel="alerts",
         rule_id="production-alarm",
         provider="mattermost",
         priority=100,
@@ -507,7 +509,7 @@ def test_match_message_route_rejects_untrusted_or_nonproduction_webhook() -> Non
         message_id="post-1",
         thread_id="post-1",
         channel_id="channel-1",
-        channel_name="online-monitoring",
+        channel_name="alerts",
         team_id="team-1",
         team_name="company",
         user_id="user-1",
@@ -574,7 +576,7 @@ def test_match_message_route_rejects_reply_and_equal_priority_ambiguity() -> Non
 
 async def test_gateway_resolves_workflow_channel_names_to_slack_id_aliases(monkeypatch) -> None:
     configured_route = MessageRoute(
-        workflow="incident-investigator",
+        workflow="example-workflow",
         channel="operations",
         trigger_words=("@ops",),
     )
@@ -593,14 +595,53 @@ async def test_gateway_resolves_workflow_channel_names_to_slack_id_aliases(monke
 
     assert routes == [
         configured_route,
-        MessageRoute(workflow="incident-investigator", channel="c123", trigger_words=("@ops",)),
+        MessageRoute(workflow="example-workflow", channel="c123", trigger_words=("@ops",)),
     ]
+
+
+async def test_gateway_message_ingress_can_pause_and_resume(monkeypatch) -> None:
+    from shared.lib.config import settings
+    from shared.lib.platform_secrets import MessageBusConfig
+
+    listener_runs = 0
+
+    class Listener:
+        async def run(self, stop_event) -> None:
+            nonlocal listener_runs
+            listener_runs += 1
+            await stop_event.wait()
+
+    async def get_user_id(*_args, **_kwargs) -> str:
+        return "bot-1"
+
+    monkeypatch.setattr(
+        settings,
+        "_message_bus",
+        MessageBusConfig(provider="mattermost", api_url="https://mattermost.test", bot_token="token"),
+    )
+    monkeypatch.setattr("gateway.message_ingress.get_mattermost_user_id", get_user_id)
+    monkeypatch.setattr("gateway.message_ingress.discover_all_message_routes", lambda: [])
+    monkeypatch.setattr("gateway.message_ingress.build_message_ingress", lambda **_kwargs: Listener())
+
+    ingress = GatewayMessageIngress()
+    await ingress.start()
+    await asyncio.sleep(0)
+    assert ingress.running is True
+
+    await ingress.pause()
+    assert ingress.running is False
+
+    await ingress.resume()
+    await asyncio.sleep(0)
+    assert ingress.running is True
+    assert listener_runs == 2
+    await ingress.stop()
 
 
 async def test_gateway_creates_structured_alert_task_with_envelope_and_coalesce_key(monkeypatch) -> None:
     route = MessageRoute(
-        workflow="online-alerts-investigator",
-        channel="online-monitoring",
+        workflow="alert-triage",
+        channel="alerts",
         rule_id="production-alarm",
         provider="mattermost",
         priority=100,
@@ -620,7 +661,7 @@ async def test_gateway_creates_structured_alert_task_with_envelope_and_coalesce_
         message_id="post-1",
         thread_id="post-1",
         channel_id="channel-1",
-        channel_name="online-monitoring",
+        channel_name="alerts",
         team_id="team-1",
         team_name="company",
         user_id="user-1",

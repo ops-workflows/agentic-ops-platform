@@ -24,7 +24,7 @@ from typing import Any
 
 import httpx
 import yaml
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from session_manager.runtime_launchers import get_runtime_launcher
 from sqlalchemy import delete, func, select, text, update
@@ -34,6 +34,7 @@ from gateway.plugin_dir import read_plugin_files
 from gateway.scheduler import compute_next_run, register_schedule_job, unregister_schedule_job
 from shared.lib.background_jobs import queue_background_job
 from shared.lib.config import settings
+from shared.lib.connector_state import MESSAGE_INGRESS_CONNECTOR_ID, connector_is_paused, set_connector_paused
 from shared.lib.db import async_session_factory
 from shared.lib.memory_catalog import BANK_INCIDENT_RCA, BANK_WORKFLOW_LEARNING, load_workflow_banks
 from shared.lib.message_bus import build_message_bus
@@ -41,6 +42,7 @@ from shared.lib.models import (
     Agent,
     Approval,
     BackgroundJobRun,
+    ConnectorState,
     KnowledgeSource,
     KnowledgeSourceVersion,
     Schedule,
@@ -258,6 +260,7 @@ class ConnectorResponse(BaseModel):
     target_channel: str | None
     tags: list[str]
     type: str
+    paused: bool = True
 
 
 class WorkflowRepoResponse(BaseModel):
@@ -709,7 +712,38 @@ def _read_connectors_catalog() -> list[ConnectorResponse]:
             )
         )
 
+    if settings.message_bus.provider and settings.message_bus.api_url:
+        connectors.append(
+            ConnectorResponse(
+                id=MESSAGE_INGRESS_CONNECTOR_ID,
+                name=f"{settings.message_bus.provider.title()} messaging",
+                summary="Platform-owned message listener and interactive action ingress",
+                description=None,
+                source_type=settings.message_bus.provider,
+                source_label=settings.message_bus.api_url,
+                target_workflow=None,
+                target_channel=settings.message_bus.team_name or None,
+                tags=["platform", "messaging"],
+                type="message-ingress",
+            )
+        )
+
     return connectors
+
+
+async def _connectors_with_state() -> list[ConnectorResponse]:
+    connectors = _read_connectors_catalog()
+    if not connectors:
+        return []
+    connector_ids = [connector.id for connector in connectors]
+    async with async_session_factory() as session:
+        states = list(
+            (
+                await session.execute(select(ConnectorState).where(ConnectorState.connector_id.in_(connector_ids)))
+            ).scalars()
+        )
+    paused_by_id = {state.connector_id: state.paused for state in states}
+    return [connector.model_copy(update={"paused": paused_by_id.get(connector.id, True)}) for connector in connectors]
 
 
 async def _hindsight_request_json_async(
@@ -1779,7 +1813,56 @@ async def get_platform_mcp_catalog():
 
 @router.get("/platform/connectors", response_model=list[ConnectorResponse])
 async def get_platform_connectors():
-    return _read_connectors_catalog()
+    return await _connectors_with_state()
+
+
+async def _set_platform_connector_paused(
+    connector_id: str,
+    *,
+    paused: bool,
+    request: Request,
+) -> ConnectorResponse:
+    connector = next((item for item in _read_connectors_catalog() if item.id == connector_id), None)
+    if connector is None:
+        raise HTTPException(status_code=404, detail="Connector not found")
+
+    ingress = None
+    previously_paused = True
+    if connector_id == MESSAGE_INGRESS_CONNECTOR_ID:
+        ingress = getattr(request.app.state, "message_ingress", None)
+        if ingress is None:
+            raise HTTPException(status_code=503, detail="Message ingress is unavailable")
+        async with async_session_factory() as session:
+            previously_paused = await connector_is_paused(session, connector_id)
+        if paused:
+            await ingress.pause()
+        else:
+            await ingress.resume()
+
+    try:
+        async with async_session_factory() as session:
+            state = await set_connector_paused(session, connector_id, paused=paused)
+    except Exception:
+        if ingress is not None and previously_paused != paused:
+            try:
+                if previously_paused:
+                    await ingress.pause()
+                else:
+                    await ingress.resume()
+            except Exception:
+                logger.exception("Failed to restore message ingress after connector state persistence failed")
+        raise
+    return connector.model_copy(update={"paused": state.paused})
+
+
+@router.post("/platform/connectors/{connector_id}/pause", response_model=ConnectorResponse)
+async def pause_platform_connector(connector_id: str, request: Request):
+    return await _set_platform_connector_paused(connector_id, paused=True, request=request)
+
+
+@router.post("/platform/connectors/{connector_id}/resume", response_model=ConnectorResponse)
+async def resume_platform_connector(connector_id: str, request: Request):
+    return await _set_platform_connector_paused(connector_id, paused=False, request=request)
 
 
 async def _fetch_github_tags(repo_url: str) -> list[WorkflowRepoVersionResponse]:

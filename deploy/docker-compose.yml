@@ -21,7 +21,7 @@ services:
       POSTGRES_USER: ${PG_USER:-agentic_ops}
       POSTGRES_PASSWORD: ${PG_PASSWORD:-localdev-postgres-password}
     ports:
-      - "${PG_PORT:-5432}:5432"
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:${PG_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
@@ -40,8 +40,8 @@ services:
       MINIO_ROOT_USER: ${OBJECT_STORE_ACCESS_KEY:-agentic_ops}
       MINIO_ROOT_PASSWORD: ${OBJECT_STORE_SECRET_KEY:-localdev-minio-password}
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:9000:9000"
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:9001:9001"
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 10s
@@ -98,7 +98,7 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "8888:8888"
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:8888:8888"
     networks:
       - ai-ops-network
 
@@ -151,7 +151,7 @@ services:
       - ../shared:/app/shared:ro
       - /var/run/docker.sock:/var/run/docker.sock
     ports:
-      - "8080:8080"
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -226,10 +226,8 @@ services:
       context: ../control-plane-ui
       dockerfile: Dockerfile
     restart: unless-stopped
-    environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8080
     ports:
-      - "3000:3000"
+      - "${CONTROL_PLANE_UI_BIND_ADDRESS:-127.0.0.1}:${CONTROL_PLANE_UI_PORT:-3000}:3000"
     depends_on:
       - gateway
     networks:
@@ -250,7 +248,7 @@ services:
     volumes:
       - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
     ports:
-      - "8100:8100"
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:8100:8100"
     networks:
       - ai-ops-network
 
@@ -268,7 +266,7 @@ services:
     depends_on:
       - hindsight
     ports:
-      - "8103:8103"
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:8103:8103"
     networks:
       - ai-ops-network
 
@@ -297,7 +295,7 @@ services:
       minio-init:
         condition: service_completed_successfully
     ports:
-      - "8108:8108"
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:8108:8108"
     networks:
       - ai-ops-network
 
@@ -316,7 +314,7 @@ services:
     depends_on:
       - gateway
     ports:
-      - "8105:8105"
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:8105:8105"
     networks:
       - ai-ops-network
 
@@ -335,7 +333,7 @@ services:
     volumes:
       - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
     ports:
-      - "8102:8102"
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:8102:8102"
     networks:
       - ai-ops-network
 
@@ -352,7 +350,7 @@ services:
     volumes:
       - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
     ports:
-      - "8101:8101"
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:8101:8101"
     networks:
       - ai-ops-network
 
@@ -369,7 +367,7 @@ services:
     volumes:
       - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
     ports:
-      - "8104:8104"
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:8104:8104"
     networks:
       - ai-ops-network
 
@@ -386,7 +384,7 @@ services:
     volumes:
       - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
     ports:
-      - "8106:8106"
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:8106:8106"
     networks:
       - ai-ops-network
 
@@ -403,7 +401,7 @@ services:
     volumes:
       - ${HOST_PLATFORM_CONFIG_FILE:-../examples/workflow-repo/platform-config.example.yaml}:/app/platform-config.yaml:ro
     ports:
-      - "8107:8107"
+      - "${HOST_BIND_ADDRESS:-127.0.0.1}:8107:8107"
     networks:
       - ai-ops-network
 
@@ -454,8 +452,6 @@ volumes:
   hindsight-data:
   knowledge-indexer-cache:
   knowledge-serving-cache:
-  agent-memory-documentation:
-  agent-memory-incident-investigator:
 
 networks:
   ai-ops-network:

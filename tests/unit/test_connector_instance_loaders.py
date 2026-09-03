@@ -37,27 +37,27 @@ def test_load_connector_instances_expands_env(tmp_path, monkeypatch):
         """
         connectors:
           enabled:
-            - sf-intake
+            - event-intake
           instances:
-            sf-intake:
+            event-intake:
               type: gcp-pubsub
               source:
                 type: pubsub
                 project: ${GCP_PROJECT}
                 subscription: ${GCP_PUBSUB_SUBSCRIPTION}
               target:
-                workflow: sf-alerts-investigator
+                workflow: example-workflow
         """,
     )
 
     instances = load_connector_instances(config)
-    assert set(instances) == {"sf-intake"}
-    assert instances["sf-intake"]["source"]["project"] == "proj-123"
-    assert instances["sf-intake"]["source"]["subscription"] == "subs"
+    assert set(instances) == {"event-intake"}
+    assert instances["event-intake"]["source"]["project"] == "proj-123"
+    assert instances["event-intake"]["source"]["subscription"] == "subs"
 
-    one = load_connector_instance(config, "sf-intake")
+    one = load_connector_instance(config, "event-intake")
     assert one["type"] == "gcp-pubsub"
-    assert one["target"]["workflow"] == "sf-alerts-investigator"
+    assert one["target"]["workflow"] == "example-workflow"
 
     assert load_connector_instance(config, "missing") == {}
 
@@ -73,9 +73,9 @@ def test_load_enabled_connector_instance_selects_one_matching_enabled_instance(t
         """
         connectors:
           enabled:
-            - sf-intake
+            - event-intake
           instances:
-            sf-intake:
+            event-intake:
               type: gcp-pubsub
             disabled-servicenow:
               type: servicenow
@@ -83,7 +83,7 @@ def test_load_enabled_connector_instance_selects_one_matching_enabled_instance(t
     )
 
     instance_id, instance = load_enabled_connector_instance(config, "gcp-pubsub")
-    assert instance_id == "sf-intake"
+    assert instance_id == "event-intake"
     assert instance == {"type": "gcp-pubsub"}
 
     assert load_enabled_connector_instance(config, "servicenow") == ("", {})

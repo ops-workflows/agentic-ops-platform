@@ -130,10 +130,10 @@ def test_registry_authorizes_and_pins_workflow_with_knowledge_mcp(tmp_path: Path
     registry._by_alias[snapshot.canonical_alias] = snapshot
     monkeypatch.setattr(
         "shared.lib.knowledge_source_serving._workflow_has_knowledge_mcp",
-        lambda workflow: workflow == "incident-investigator",
+        lambda workflow: workflow == "example-workflow",
     )
 
-    with registry.pin("org/example", "incident-investigator") as pinned:
+    with registry.pin("org/example", "example-workflow") as pinned:
         assert pinned.version_id == snapshot.version_id
         assert registry._pins[(snapshot.source_id, snapshot.version_id)] == 1
     assert registry._pins == {}

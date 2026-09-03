@@ -23,10 +23,6 @@ mcps:
          allowed_objects: [Account, Case, Contact]
          # ... see docs/mcps.md for the full schema
       splunk:
-         allowed_hosts: [splunk.example.com]
-         allowed_indexes: [main]
-         saved_searches:
-            example-errors: nobody/search/Example-errors
          max_window_hours: 24
          max_evidence_bytes: 65536
       evidence:

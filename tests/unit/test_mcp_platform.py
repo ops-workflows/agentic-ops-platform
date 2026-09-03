@@ -54,9 +54,9 @@ def test_workflow_github_context_rejects_repo_on_other_host(monkeypatch):
     "file_path",
     [
         "skills/private-shared/SKILL.md",
-        "workflows/incident-investigator/agents/coordinator.md",
-        "workflows/incident-investigator/CLAUDE.md",
-        "workflows/incident-investigator/skills/triage/SKILL.md",
+        "workflows/example-workflow/agents/coordinator.md",
+        "workflows/example-workflow/CLAUDE.md",
+        "workflows/example-workflow/skills/triage/SKILL.md",
     ],
 )
 def test_validate_skill_path_allows_only_private_workflow_repo_content(file_path):
@@ -67,7 +67,7 @@ def test_validate_skill_path_allows_only_private_workflow_repo_content(file_path
     "file_path",
     [
         "skills/reflect/README.md",
-        "workflows/incident-investigator/README.md",
+        "workflows/example-workflow/README.md",
         "../skills/private-shared/SKILL.md",
         "CLAUDE.md",
     ],
