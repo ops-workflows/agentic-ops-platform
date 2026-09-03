@@ -47,6 +47,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
+    { name = "zstandard" },
 ]
 knowledge-indexer = [
     { name = "graphifyy" },
@@ -87,6 +88,7 @@ requires-dist = [
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.30" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0" },
     { name = "websockets", specifier = ">=15.0" },
+    { name = "zstandard", marker = "extra == 'dev'", specifier = "==0.25.0" },
     { name = "zstandard", marker = "extra == 'knowledge-indexer'", specifier = "==0.25.0" },
 ]
 provides-extras = ["dev", "connectors", "kubernetes", "knowledge-indexer"]

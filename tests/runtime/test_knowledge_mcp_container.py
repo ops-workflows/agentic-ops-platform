@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import socket
 import time
+import urllib.error
+import urllib.request
 import uuid
 from pathlib import Path
 
@@ -50,6 +53,50 @@ def _wait_for_port(container, container_port: str, timeout_sec: float = 30) -> i
                 last_error = exc
         time.sleep(0.1)
     pytest.fail(f"Container port {container_port} was not ready: {last_error}")
+
+
+def _wait_for_minio(container, timeout_sec: float = 30) -> int:
+    host_port = _wait_for_port(container, "9000/tcp", timeout_sec=timeout_sec)
+    deadline = time.monotonic() + timeout_sec
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        container.reload()
+        if container.status == "exited":
+            pytest.fail(container.logs(tail=200).decode("utf-8", errors="replace"))
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{host_port}/minio/health/ready",
+                timeout=0.5,
+            ) as response:
+                if response.status == 200:
+                    return host_port
+        except (OSError, urllib.error.URLError) as exc:
+            last_error = exc
+        time.sleep(0.1)
+    logs = container.logs(tail=200).decode("utf-8", errors="replace")
+    pytest.fail(f"MinIO was not ready: {last_error}\nLogs:\n{logs}")
+
+
+async def _wait_for_mcp(container, host_port: int, timeout_sec: float = 30) -> None:
+    deadline = time.monotonic() + timeout_sec
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        container.reload()
+        if container.status == "exited":
+            pytest.fail(container.logs(tail=200).decode("utf-8", errors="replace"))
+        transport = StreamableHttpTransport(
+            f"http://127.0.0.1:{host_port}/mcp",
+            headers={"x-task-workflow": "platform-test"},
+        )
+        try:
+            async with Client(transport, timeout=3) as client:
+                if await client.ping():
+                    return
+        except Exception as exc:
+            last_error = exc
+        await asyncio.sleep(0.1)
+    logs = container.logs(tail=200).decode("utf-8", errors="replace")
+    pytest.fail(f"Knowledge MCP was not ready: {last_error!r}\nLogs:\n{logs}")
 
 
 def _build_bundle(tmp_path: Path, source: KnowledgeSource, version: KnowledgeSourceVersion):
@@ -153,7 +200,7 @@ async def test_knowledge_mcp_hydrates_minio_bundle_and_serves_source(
         warnings=[],
     )
     try:
-        minio_port = _wait_for_port(minio, "9000/tcp")
+        minio_port = _wait_for_minio(minio)
         store = S3ObjectStore(
             endpoint=f"127.0.0.1:{minio_port}",
             access_key=MINIO_ACCESS_KEY,
@@ -221,6 +268,7 @@ async def test_knowledge_mcp_hydrates_minio_bundle_and_serves_source(
             },
         )
         mcp_port = _wait_for_port(mcp, "8108/tcp")
+        await _wait_for_mcp(mcp, mcp_port)
         transport = StreamableHttpTransport(
             f"http://127.0.0.1:{mcp_port}/mcp",
             headers={"x-task-workflow": "platform-test"},
