@@ -71,15 +71,15 @@ container's normal filesystem, process, and network model.
 gVisor is not a VM and does not replace deployment policy. Operators must still
 minimize mounts, avoid Docker sockets and host paths, use non-root runtime
 users, constrain egress, apply resource limits, and keep images and gVisor
-patched. The Compose deployment selects the `runsc-pr13532` Docker runtime only
-for ephemeral agent-session containers when `SANDBOX_MODE=gvisor`; the
-long-running platform services continue to use their configured Docker runtime.
+patched. The Compose deployment selects `runsc` only for ephemeral agent-session
+containers when `SANDBOX_MODE=gvisor`; the long-running platform services
+continue to use their configured Docker runtime.
 
 Together, the layers look like this:
 
 ```text
 host kernel
-  -> gVisor/runsc-pr13532 isolates the agent-session container
+  -> gVisor/runsc isolates the agent-session container
     -> Claude Code/Bubblewrap isolates Bash and its child processes
       -> permission and credential rules constrain individual tool use
 ```
@@ -91,11 +91,21 @@ the selected gVisor release and Claude Code version.
 
 ### Providing an outer sandbox
 
-**Linux VM with Docker Compose.** Until
+**Linux VM with Docker Compose.** Install a supported `runsc` binary using the
+[gVisor installation guide](https://gvisor.dev/docs/user_guide/install/), then
+register it with Docker and restart Docker:
+
+```sh
+sudo runsc install
+sudo systemctl restart docker
+docker run --runtime=runsc --rm hello-world
+```
+
+**Temporary compatibility runtime.** Until
 [gVisor PR 13532](https://github.com/google/gvisor/pull/13532) is merged into a
-supported release, build that revision of `runsc` and install the binary as
-`/usr/local/bin/runsc-pr13532`. Register it with Docker under the same explicit
-runtime name and restart Docker:
+supported release, also build that revision of `runsc`, install its binary as
+`/usr/local/bin/runsc-pr13532`, and register it with Docker under that explicit
+runtime name:
 
 ```sh
 sudo /usr/local/bin/runsc-pr13532 install --runtime=runsc-pr13532
@@ -103,12 +113,8 @@ sudo systemctl restart docker
 docker run --runtime=runsc-pr13532 --rm hello-world
 ```
 
-The runtime image pins Bubblewrap 0.11.0, the version qualified with this
-gVisor revision. Bubblewrap 0.12.0 fixes
-[GHSA-pxhw-h44j-8pfx](https://github.com/containers/bubblewrap/security/advisories/GHSA-pxhw-h44j-8pfx),
-so treat 0.11.0 as a temporary compatibility pin and never use it without the
-outer gVisor boundary. Requalify both versions together before changing either
-one.
+The runtime image pins Bubblewrap 0.11.0, the version qualified with this gVisor
+runtime. Requalify Bubblewrap and gVisor together before upgrading either one.
 
 After `make bootstrap`, start the platform with:
 
@@ -116,20 +122,20 @@ After `make bootstrap`, start the platform with:
 SANDBOX_MODE=gvisor make up
 ```
 
-The session manager then requests `runtime="runsc-pr13532"` for each
-agent-session container. Keep it as an explicitly selected runtime rather than
-changing Docker's global default unless every workload on the VM has been
-qualified for it.
+The session manager currently requests `runtime="runsc-pr13532"` for each
+agent-session container. Keep `runsc` as an explicitly selected runtime rather
+than changing Docker's global default unless every workload on the VM has been
+qualified for it. Once PR 13532 is included in a qualified gVisor release,
+remove the compatibility runtime registration and switch sessions back to
+`runtime="runsc"`.
 
 gVisor netstack cannot use Docker's embedded DNS on a user-defined bridge
 network because it does not import Docker's netfilter redirection for
 `127.0.0.11` ([gVisor issue 7469](https://github.com/google/gvisor/issues/7469)).
 For gVisor sessions, the Docker launcher therefore snapshots the current IP and
 DNS aliases of peers already attached to `DOCKER_NETWORK` into the session's
-`/etc/hosts`. Set `RUNTIME_DNS_SERVERS` on session-manager to a comma-separated
-list of deployment DNS server IPs for names outside that Docker network. Do not
-switch gVisor to host networking merely to restore DNS; that weakens its network
-isolation boundary.
+`/etc/hosts`. Do not switch gVisor to host networking merely to restore DNS; that
+weakens its network isolation boundary.
 
 **Kubernetes.** A plain Pod is not an agent-sandbox product by itself. On GKE,
 [GKE Agent Sandbox](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/machine-learning/agent-sandbox)

@@ -176,7 +176,6 @@ services:
       DOCKER_HOST: unix:///var/run/docker.sock
       DOCKER_NETWORK: ${DOCKER_NETWORK:-ai-ops-network}
       GATEWAY_EVENT_URL: http://gateway:8080/events
-      RUNTIME_DNS_SERVERS: ${RUNTIME_DNS_SERVERS:-}
       OBJECT_STORE_ENDPOINT: minio:9000
       OBJECT_STORE_ACCESS_KEY: ${OBJECT_STORE_ACCESS_KEY:-agentic_ops}
       KNOWLEDGE_SOURCE_OBJECT_STORE_BUCKET: ${KNOWLEDGE_SOURCE_OBJECT_STORE_BUCKET:-agentic-ops-knowledge-sources}

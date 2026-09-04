@@ -28,7 +28,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
-import ipaddress
 import json
 import logging
 import os
@@ -237,17 +236,6 @@ def _verify_workflow_bundle_checksum(bundle_dir: Path) -> None:
 
 
 _BWRAP_SUPPORT_PROBE: bool | None = None
-RESOLV_CONF_PATH = Path("/etc/resolv.conf")
-
-
-def _apply_runtime_dns_override() -> None:
-    configured = [server.strip() for server in os.environ.get("RUNTIME_DNS_SERVERS", "").split(",") if server.strip()]
-    if not configured:
-        return
-    servers = [str(ipaddress.ip_address(server)) for server in configured]
-    content = "".join(f"nameserver {server}\n" for server in servers)
-    RESOLV_CONF_PATH.write_text(content + "options edns0 trust-ad ndots:0\n")
-    logger.info("Configured %d runtime DNS server(s)", len(servers))
 
 
 def _bubblewrap_supported() -> bool:
@@ -2123,8 +2111,6 @@ async def main():
     logger.info("Starting session for task %s", TASK_ID)
     logger.info("Prompt: %s...", TASK_PROMPT[:200])
     logger.info("Plugin dir: %s", PLUGIN_DIR)
-
-    _apply_runtime_dns_override()
 
     if not PLUGIN_SOURCE_DIR.exists():
         logger.error("Plugin source dir %s not found", PLUGIN_SOURCE_DIR)

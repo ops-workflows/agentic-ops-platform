@@ -7,7 +7,6 @@ depending directly on a Docker daemon.
 
 from __future__ import annotations
 
-import ipaddress
 import logging
 import os
 import sys
@@ -30,11 +29,6 @@ def _sandbox_mode() -> str:
 
 def _docker_network() -> str:
     return os.environ.get("DOCKER_NETWORK", DEFAULT_DOCKER_NETWORK).strip() or DEFAULT_DOCKER_NETWORK
-
-
-def _runtime_dns_servers() -> list[str]:
-    servers = [server.strip() for server in os.environ.get("RUNTIME_DNS_SERVERS", "").split(",") if server.strip()]
-    return [str(ipaddress.ip_address(server)) for server in servers]
 
 
 def _network_peer_hosts(client: docker.DockerClient, network_name: str) -> dict[str, str]:
@@ -208,9 +202,6 @@ class DockerRuntimeLauncher:
         elif sandbox_mode == "gvisor":
             run_kwargs["runtime"] = "runsc-pr13532"
             run_kwargs.setdefault("extra_hosts", {}).update(_network_peer_hosts(self.client, run_kwargs["network"]))
-            dns_servers = _runtime_dns_servers()
-            if dns_servers:
-                run_kwargs["environment"]["RUNTIME_DNS_SERVERS"] = ",".join(dns_servers)
 
         container = self.client.containers.run(**run_kwargs)
         return RuntimeHandle(
