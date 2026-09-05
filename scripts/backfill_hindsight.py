@@ -54,6 +54,14 @@ def _session_result_text(session_detail: dict[str, Any] | None) -> str:
         result = data.get("result")
         if isinstance(result, str) and result.strip():
             return result.strip()
+    # Check trace root for final result if events not returned
+    trace = (session_detail or {}).get("trace") or {}
+    root = trace.get("root") or {}
+    for child in reversed(root.get("children") or []):
+        if isinstance(child, dict) and child.get("kind") == "result" and child.get("label") == "Final":
+            body = child.get("body")
+            if isinstance(body, str) and body.strip():
+                return body.strip()
     return ""
 
 

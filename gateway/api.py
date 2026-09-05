@@ -53,6 +53,7 @@ from shared.lib.models import (
 from shared.lib.object_store import BUCKET_AGENT_MEMORY, download_bytes, list_objects
 from shared.lib.platform_secrets import load_connector_instances, load_github_app_connections
 from shared.lib.task_queue import archive_task, count_tasks, list_tasks
+from shared.lib.trace_tree import SessionTraceResponse, build_trace_tree
 from shared.lib.workflow_paths import discover_workflow_packages, find_workflow_package
 
 logger = logging.getLogger(__name__)
@@ -141,14 +142,14 @@ class SessionDetailResponse(BaseModel):
     started: str | None
     ended: str | None
     duration_sec: float | None
-    tokens_input: int
-    tokens_output: int
-    turns: int
+    tokens_input: int | None = None
+    tokens_output: int | None = None
+    turns: int | None = None
     task: TaskResponse | None = None
-    tools_used: list
-    subagents_used: list
-    error: str | None
-    events: list[dict]
+    tools_used: list = Field(default_factory=list)
+    subagents_used: list = Field(default_factory=list)
+    error: str | None = None
+    trace: SessionTraceResponse | None = None
 
 
 class AnalyticsResponse(BaseModel):
@@ -1617,6 +1618,17 @@ async def get_session_detail(task_id: str):
     if not sess and not events:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    raw_events = [
+        {
+            "id": str(e.id),
+            "event_type": e.event_type,
+            "timestamp": e.timestamp.isoformat(),
+            "data": e.data,
+        }
+        for e in events
+    ]
+    trace = build_trace_tree(raw_events, full_prompt=task.prompt if task else None)
+
     # Build response even when Session record is missing (e.g. task ran
     # outside the session manager but events were still collected).
     return SessionDetailResponse(
@@ -1636,15 +1648,7 @@ async def get_session_detail(task_id: str):
         tools_used=sess.tools_used if sess else [],
         subagents_used=sess.subagents_used if sess else [],
         error=sess.error if sess else (task.error if task else None),
-        events=[
-            {
-                "id": str(e.id),
-                "event_type": e.event_type,
-                "timestamp": e.timestamp.isoformat(),
-                "data": e.data,
-            }
-            for e in events
-        ],
+        trace=trace,
     )
 
 

@@ -62,6 +62,55 @@ export interface TaskListResult {
   offset: number;
 }
 
+export type NodeKind =
+  | 'session'
+  | 'user'
+  | 'assistant'
+  | 'thinking'
+  | 'messaging'
+  | 'tool_call'
+  | 'tool_result'
+  | 'subagent'
+  | 'subagent_progress'
+  | 'hook'
+  | 'lifecycle'
+  | 'result'
+  | 'error';
+
+export interface TraceNode {
+  id: string;
+  kind: NodeKind;
+  timestamp: string;
+  label: string;
+  detail?: string | null;
+  body?: string | null;
+  duration?: number | null;
+  isError?: boolean;
+  badge?: string | null;
+  children: TraceNode[];
+  raw?: unknown;
+  meta?: Record<string, string>;
+}
+
+export interface SessionStats {
+  toolCalls: number;
+  toolErrors: number;
+  assistantMessages: number;
+  subagentSpawns: number;
+  totalTurns: number;
+  tokensIn: number;
+  tokensOut: number;
+}
+
+export interface SessionTrace {
+  root: TraceNode;
+  stats: SessionStats;
+  heartbeats: Array<Record<string, unknown>>;
+  skillsUsed: string[];
+  mcpsUsed: string[];
+  eventCount: number;
+}
+
 export interface SessionDetail {
   id: string;
   task_id: string | null;
@@ -70,14 +119,14 @@ export interface SessionDetail {
   started: string | null;
   ended: string | null;
   duration_sec: number | null;
-  tokens_input: number;
-  tokens_output: number;
-  turns: number;
+  tokens_input: number | null;
+  tokens_output: number | null;
+  turns: number | null;
   task: Task | null;
   tools_used: Array<{ name: string; count: number; total_duration: number }>;
   subagents_used: Array<{ name: string; turns: number; tokens: number }>;
   error: string | null;
-  events: SessionEvent[];
+  trace: SessionTrace | null;
 }
 
 export interface SessionEvent {

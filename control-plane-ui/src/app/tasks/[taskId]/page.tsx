@@ -29,60 +29,17 @@ import {
 import { MarkdownPreview, SyntaxCode } from '@/components/content-preview';
 import {
   apiFetch,
+  type NodeKind,
   type SessionDetail,
-  type SessionEvent,
   type Task,
   type TaskDeleteResult,
   type TaskResetResult,
+  type TraceNode,
 } from '@/lib/api';
 import { useParams } from 'next/navigation';
 
 const RERUNNABLE_STATUSES = new Set(['failed', 'lost', 'timed_out']);
 const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'lost', 'timed_out']);
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   Types — hierarchical trace tree
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-type NodeKind =
-  | 'session'
-  | 'user'
-  | 'assistant'
-  | 'thinking'
-  | 'messaging'
-  | 'tool_call'
-  | 'tool_result'
-  | 'subagent'
-  | 'subagent_progress'
-  | 'hook'
-  | 'lifecycle'
-  | 'result'
-  | 'error';
-
-interface TraceNode {
-  id: string;
-  kind: NodeKind;
-  timestamp: string;
-  label: string;
-  detail?: string;
-  body?: string;
-  duration?: number;
-  isError?: boolean;
-  badge?: string;
-  children: TraceNode[];
-  raw?: unknown;
-  meta?: Record<string, string>;
-}
-
-interface SessionStats {
-  toolCalls: number;
-  toolErrors: number;
-  assistantMessages: number;
-  subagentSpawns: number;
-  totalTurns: number;
-  tokensIn: number;
-  tokensOut: number;
-}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Formatters
@@ -169,843 +126,12 @@ function formatJsonValue(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function formatTraceBody(input: string): string {
-  try {
-    return JSON.stringify(JSON.parse(input), null, 2);
-  } catch {
-    return input;
-  }
-}
-
 function getJsonBody(input: string): string | undefined {
   try {
     return JSON.stringify(JSON.parse(input), null, 2);
   } catch {
     return undefined;
   }
-}
-
-function epochToIso(v: unknown, fallback: string): string {
-  return typeof v === 'number' ? new Date(v * 1000).toISOString() : fallback;
-}
-
-function flatText(content: unknown): string {
-  if (!Array.isArray(content)) return '';
-  return content
-    .filter((b): b is Record<string, unknown> => !!b && typeof b === 'object')
-    .filter((b) => b.type === 'text' && typeof b.text === 'string')
-    .map((b) => b.text as string)
-    .join('\n\n')
-    .trim();
-}
-
-function parseAgentPreview(input: string): { name: string; detail?: string } {
-  let name = 'subagent';
-  let detail: string | undefined;
-
-  try {
-    const parsed = JSON.parse(input) as Record<string, unknown>;
-    name =
-      typeof parsed.subagent_type === 'string'
-        ? parsed.subagent_type
-        : typeof parsed.description === 'string'
-          ? parsed.description
-          : name;
-    detail =
-      typeof parsed.description === 'string' ? parsed.description : undefined;
-    return { name, detail };
-  } catch {
-    const subagentMatch = input.match(/"subagent_type"\s*:\s*"([^"]+)"/);
-    const descriptionMatch = input.match(/"description"\s*:\s*"([^"]+)"/);
-    return {
-      name: subagentMatch?.[1] ?? descriptionMatch?.[1] ?? name,
-      detail: descriptionMatch?.[1],
-    };
-  }
-}
-
-function parseSkillPreview(input: string): string | undefined {
-  try {
-    const parsed = JSON.parse(input) as Record<string, unknown>;
-    return typeof parsed.skill === 'string' ? parsed.skill : undefined;
-  } catch {
-    return input.match(/"skill"\s*:\s*"([^"]+)"/)?.[1];
-  }
-}
-
-function parseSendMessagePreview(input: string): {
-  recipientId?: string;
-  message?: string;
-  summary?: string;
-} {
-  try {
-    const parsed = JSON.parse(input) as Record<string, unknown>;
-    return {
-      recipientId:
-        typeof parsed.to === 'string'
-          ? parsed.to
-          : typeof parsed.recipient === 'string'
-            ? parsed.recipient
-            : undefined,
-      message:
-        typeof parsed.message === 'string'
-          ? parsed.message
-          : typeof parsed.content === 'string'
-            ? parsed.content
-            : undefined,
-      summary: typeof parsed.summary === 'string' ? parsed.summary : undefined,
-    };
-  } catch {
-    return {
-      recipientId: input.match(/"(?:to|recipient)"\s*:\s*"([^"]+)"/)?.[1],
-      message: input.match(/"(?:message|content)"\s*:\s*"([^"]+)"/)?.[1],
-      summary: input.match(/"summary"\s*:\s*"([^"]+)"/)?.[1],
-    };
-  }
-}
-
-function summarizeTaskType(value: unknown): string | undefined {
-  if (typeof value !== 'string' || !value.trim()) return undefined;
-  return value.replace(/_/g, ' ');
-}
-
-function isDuplicateNarrative(left?: string, right?: string): boolean {
-  const normalizedLeft = left?.trim();
-  const normalizedRight = right?.trim();
-  if (!normalizedLeft || !normalizedRight) return false;
-  if (normalizedLeft === normalizedRight) return true;
-  const prefixLength = Math.min(
-    normalizedLeft.length,
-    normalizedRight.length,
-    280,
-  );
-  return (
-    normalizedLeft.slice(0, prefixLength) ===
-    normalizedRight.slice(0, prefixLength)
-  );
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   Tree builder — converts flat events into hierarchical trace
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-function buildTree(
-  events: SessionEvent[],
-  fullPrompt?: string,
-  includeThinking = false,
-): {
-  root: TraceNode;
-  stats: SessionStats;
-  heartbeats: SessionEvent[];
-  skillsUsed: string[];
-  mcpsUsed: string[];
-} {
-  const root: TraceNode = {
-    id: 'root',
-    kind: 'session',
-    timestamp: events[0]?.timestamp ?? new Date().toISOString(),
-    label: 'Trace',
-    children: [],
-  };
-
-  const heartbeats: SessionEvent[] = [];
-  const toolNameMap = new Map<string, string>();
-  const pendingToolCalls = new Map<string, TraceNode>();
-  const messageToolIds = new Set<string>();
-  const subagentsByTaskId = new Map<string, TraceNode>();
-  // Subagent node keyed by the Task/Agent tool_use id that spawned it. Subagent
-  // messages carry that id in parent_tool_use_id, letting us nest their real
-  // activity under the correct branch regardless of interleaving order.
-  const subagentNodesByToolId = new Map<string, TraceNode>();
-  const subagentNamesByAgentId = new Map<string, string>();
-  const resultNodes: TraceNode[] = [];
-  const skillNames = new Set<string>();
-  // MCP servers actually used, derived from tool calls named mcp__<server>__<tool>.
-  const mcpServers = new Set<string>();
-  let defaultAgent: string | undefined;
-
-  let activeSubagent: TraceNode | null = null;
-  const stats: SessionStats = {
-    toolCalls: 0,
-    toolErrors: 0,
-    assistantMessages: 0,
-    subagentSpawns: 0,
-    totalTurns: 0,
-    tokensIn: 0,
-    tokensOut: 0,
-  };
-
-  function currentParent(): TraceNode {
-    return activeSubagent ?? root;
-  }
-
-  // Resolve the owning branch for a conversation message. Subagent messages set
-  // parent_tool_use_id to the spawning Agent tool id; everything else belongs to
-  // the top-level session.
-  function resolveMsgParent(msg: Record<string, unknown> | null): TraceNode {
-    const pid =
-      msg && typeof msg.parent_tool_use_id === 'string'
-        ? msg.parent_tool_use_id
-        : undefined;
-    if (pid) {
-      const node = subagentNodesByToolId.get(pid);
-      if (node) return node;
-    }
-    return root;
-  }
-
-  for (const event of events) {
-    const data = (event.data ?? {}) as Record<string, unknown>;
-
-    if (event.event_type === 'heartbeat') {
-      heartbeats.push(event);
-      continue;
-    }
-
-    if (event.event_type === 'session_start') {
-      if (typeof data.agent === 'string' && data.agent.trim()) {
-        defaultAgent = data.agent.trim();
-        root.label = defaultAgent;
-      }
-      // Prefer the full task prompt over the truncated preview so the initial
-      // message is shown in full.
-      const promptBody = fullPrompt?.trim()
-        ? fullPrompt
-        : typeof data.prompt_preview === 'string'
-          ? data.prompt_preview
-          : undefined;
-      root.timestamp = event.timestamp;
-      root.detail = promptBody;
-      root.children.push({
-        id: event.id,
-        kind: 'lifecycle',
-        timestamp: event.timestamp,
-        label: '',
-        detail: '',
-        body: promptBody,
-        badge: 'REQUEST',
-        children: [],
-        raw: data,
-      });
-      continue;
-    }
-
-    if (event.event_type === 'session_phase') {
-      const phase = typeof data.phase === 'string' ? data.phase : 'unknown';
-      if (
-        phase === 'first_sdk_message' ||
-        phase === 'claude_query_complete' ||
-        phase === 'claude_query_start'
-      ) {
-        continue;
-      }
-      currentParent().children.push({
-        id: event.id,
-        kind: 'lifecycle',
-        timestamp: event.timestamp,
-        label: phase,
-        children: [],
-        raw: data,
-      });
-      continue;
-    }
-
-    if (event.event_type === 'conversation_batch') {
-      const messages = Array.isArray(data.messages) ? data.messages : [];
-      for (let i = 0; i < messages.length; i++) {
-        const msg = messages[i] as Record<string, unknown> | null;
-        if (!msg || typeof msg !== 'object') continue;
-        const ts = epochToIso(msg.timestamp, event.timestamp);
-        const content = Array.isArray(msg.content) ? msg.content : [];
-
-        /* ── User message ── */
-        if (msg.type === 'user') {
-          const text = flatText(content);
-          if (text) {
-            resolveMsgParent(msg).children.push({
-              id: `${event.id}-u-${i}`,
-              kind: 'user',
-              timestamp: ts,
-              label: 'User',
-              body: text,
-              children: [],
-              raw: msg,
-            });
-          }
-          continue;
-        }
-
-        /* ── Assistant message ── */
-        if (msg.type === 'assistant') {
-          const text = flatText(content);
-          const thinking = content
-            .filter(
-              (b: unknown): b is Record<string, unknown> =>
-                !!b &&
-                typeof b === 'object' &&
-                (b as Record<string, unknown>).type === 'thinking' &&
-                typeof (b as Record<string, unknown>).preview === 'string',
-            )
-            .map((b) => b.preview as string)
-            .join('\n\n')
-            .trim();
-          const toolBlocks = content.filter(
-            (b: unknown): b is Record<string, unknown> =>
-              !!b &&
-              typeof b === 'object' &&
-              (b as Record<string, unknown>).type === 'tool_use',
-          );
-
-          if (text) {
-            stats.assistantMessages++;
-            resolveMsgParent(msg).children.push({
-              id: `${event.id}-a-${i}`,
-              kind: 'assistant',
-              timestamp: ts,
-              label: '',
-              body: text,
-              children: [],
-              raw: msg,
-            });
-          }
-
-          if (includeThinking && thinking) {
-            resolveMsgParent(msg).children.push({
-              id: `${event.id}-think-${i}`,
-              kind: 'thinking',
-              timestamp: ts,
-              label: 'Reasoning',
-              body: thinking,
-              children: [],
-              raw: msg,
-            });
-          }
-
-          for (const block of toolBlocks) {
-            const toolId =
-              typeof block.id === 'string' ? block.id : `${event.id}-${i}-tc`;
-            const toolName =
-              typeof block.name === 'string' ? block.name : 'unknown_tool';
-            const skillName =
-              toolName === 'Skill' && typeof block.input_preview === 'string'
-                ? parseSkillPreview(block.input_preview)
-                : undefined;
-            const resolvedToolName =
-              toolName === 'Skill' && skillName ? skillName : toolName;
-            const isSkill = toolName === 'Skill' && Boolean(skillName);
-            const mcpMatch = toolName.match(/^mcp__([^_]+)__(.+)$/);
-            const isMcp = Boolean(mcpMatch);
-            const traceToolName = mcpMatch
-              ? `${mcpMatch[1]} · ${mcpMatch[2]}`
-              : resolvedToolName;
-            const toolInput =
-              !isSkill && typeof block.input_preview === 'string'
-                ? formatTraceBody(block.input_preview)
-                : undefined;
-            toolNameMap.set(toolId, resolvedToolName);
-            if (skillName) {
-              skillNames.add(skillName);
-            }
-            if (toolName.startsWith('mcp__')) {
-              const server = toolName.split('__')[1];
-              if (server) mcpServers.add(server);
-            }
-            stats.toolCalls++;
-
-            const isInternalMessage = toolName === 'SendMessage';
-            const messageInfo =
-              isInternalMessage && typeof block.input_preview === 'string'
-                ? parseSendMessagePreview(block.input_preview)
-                : undefined;
-            const parent = resolveMsgParent(msg);
-            const sender =
-              parent === root ? (defaultAgent ?? 'Coordinator') : parent.label;
-            const message = messageInfo?.message?.trim();
-            const recipientId = messageInfo?.recipientId?.trim();
-
-            if (isInternalMessage) messageToolIds.add(toolId);
-
-            // An incomplete SendMessage payload has no useful audit value and
-            // should not be rendered as an invented "specialist" destination.
-            if (isInternalMessage && (!message || !recipientId)) {
-              continue;
-            }
-            const toolNode: TraceNode = {
-              id: `${event.id}-tc-${toolId}`,
-              kind: isInternalMessage ? 'messaging' : 'tool_call',
-              timestamp: ts,
-              label: isInternalMessage
-                ? `${sender} -> ${recipientId}`
-                : traceToolName,
-              body: isInternalMessage
-                ? message
-                : isSkill
-                  ? undefined
-                  : toolInput,
-              badge: isSkill ? 'SKILL' : isMcp ? 'MCP' : undefined,
-              children: [],
-              raw: block,
-              meta: {
-                tool_use_id: toolId,
-                ...(isInternalMessage && recipientId
-                  ? { recipient_id: recipientId }
-                  : {}),
-                ...(skillName ? { skill: skillName } : {}),
-              },
-            };
-
-            if (toolName === 'Agent') {
-              const input =
-                typeof block.input_preview === 'string'
-                  ? block.input_preview
-                  : '';
-              const agentInfo = parseAgentPreview(input);
-
-              const subNode: TraceNode = {
-                id: `${event.id}-sub-${toolId}`,
-                kind: 'subagent',
-                timestamp: ts,
-                label: agentInfo.name,
-                detail: agentInfo.detail,
-                children: [],
-                raw: block,
-                meta: { tool_use_id: toolId },
-              };
-              stats.subagentSpawns++;
-              resolveMsgParent(msg).children.push(subNode);
-              activeSubagent = subNode;
-              subagentNodesByToolId.set(toolId, subNode);
-              pendingToolCalls.set(toolId, subNode);
-            } else {
-              resolveMsgParent(msg).children.push(toolNode);
-              pendingToolCalls.set(toolId, toolNode);
-            }
-          }
-          continue;
-        }
-
-        /* ── Tool result ── */
-        if (msg.type === 'tool_result') {
-          const toolUseId =
-            typeof msg.tool_use_id === 'string' ? msg.tool_use_id : '';
-          const preview =
-            typeof msg.content_preview === 'string' ? msg.content_preview : '';
-          const isErr = Boolean(msg.is_error);
-          if (isErr) stats.toolErrors++;
-          const resultNode: TraceNode = {
-            id: `${event.id}-tr-${i}`,
-            kind: 'tool_result',
-            timestamp: ts,
-            label: '',
-            body: formatTraceBody(preview),
-            isError: isErr,
-            children: [],
-            raw: msg,
-            meta: { tool_use_id: toolUseId },
-          };
-
-          const parentCall = pendingToolCalls.get(toolUseId);
-          if (!isErr && messageToolIds.has(toolUseId)) {
-            pendingToolCalls.delete(toolUseId);
-            continue;
-          }
-          if (parentCall) {
-            if (parentCall.kind === 'messaging') {
-              if (isErr) parentCall.children.push(resultNode);
-              pendingToolCalls.delete(toolUseId);
-              continue;
-            }
-            if (parentCall.kind === 'subagent') {
-              const agentId = preview.match(/agentId:\s*['"]?([\w-]+)/)?.[1];
-              if (agentId) {
-                subagentNamesByAgentId.set(agentId, parentCall.label);
-                parentCall.meta = {
-                  ...(parentCall.meta ?? {}),
-                  agent_id: agentId,
-                };
-              }
-              if (isErr) parentCall.children.push(resultNode);
-              pendingToolCalls.delete(toolUseId);
-              continue;
-            }
-            parentCall.children.push(resultNode);
-            pendingToolCalls.delete(toolUseId);
-          } else {
-            resolveMsgParent(msg).children.push(resultNode);
-          }
-          continue;
-        }
-
-        /* ── Unknown tool_result via repr fallback ── */
-        if (msg.type === 'unknown' && typeof msg.repr === 'string') {
-          const toolUseIdMatch = (msg.repr as string).match(
-            /tool_use_id='([^']+)'/,
-          );
-          if (toolUseIdMatch) {
-            const toolUseId = toolUseIdMatch[1];
-            const isErr = /is_error=True/.test(msg.repr as string);
-            if (isErr) stats.toolErrors++;
-            const contentStart = (msg.repr as string).indexOf('content=');
-            const contentEnd = (msg.repr as string).lastIndexOf(', is_error=');
-            let body = '';
-            if (contentStart !== -1) {
-              body =
-                contentEnd > contentStart + 8
-                  ? (msg.repr as string).slice(contentStart + 8, contentEnd)
-                  : (msg.repr as string).slice(contentStart + 8);
-              body = body
-                .replace(/^'/, '')
-                .replace(/'\]\)?$/, '')
-                .replace(/'$/, '')
-                .replace(/\\n/g, '\n')
-                .replace(/\\'/g, "'");
-            }
-
-            const resultNode: TraceNode = {
-              id: `${event.id}-utr-${i}`,
-              kind: 'tool_result',
-              timestamp: ts,
-              label: '',
-              body: formatTraceBody(body),
-              isError: isErr,
-              children: [],
-              raw: msg,
-              meta: { tool_use_id: toolUseId },
-            };
-
-            const parentCall = pendingToolCalls.get(toolUseId);
-            if (!isErr && messageToolIds.has(toolUseId)) {
-              pendingToolCalls.delete(toolUseId);
-              continue;
-            }
-            if (parentCall) {
-              if (parentCall.kind === 'messaging') {
-                if (isErr) parentCall.children.push(resultNode);
-                pendingToolCalls.delete(toolUseId);
-                continue;
-              }
-              if (parentCall.kind === 'subagent') {
-                if (isErr) parentCall.children.push(resultNode);
-                pendingToolCalls.delete(toolUseId);
-                continue;
-              }
-              parentCall.children.push(resultNode);
-              pendingToolCalls.delete(toolUseId);
-            } else {
-              resolveMsgParent(msg).children.push(resultNode);
-            }
-            continue;
-          }
-        }
-
-        /* ── System / subagent progress ── */
-        if (msg.type === 'system') {
-          const subtype =
-            typeof msg.subtype === 'string' ? msg.subtype : 'system';
-          const sysData =
-            msg.data && typeof msg.data === 'object'
-              ? (msg.data as Record<string, unknown>)
-              : {};
-
-          if (subtype === 'task_notification') {
-            const taskId =
-              typeof sysData.task_id === 'string' ? sysData.task_id : undefined;
-            const summary =
-              typeof sysData.summary === 'string' ? sysData.summary : undefined;
-            const status =
-              typeof sysData.status === 'string' ? sysData.status : undefined;
-            const toolUseId =
-              typeof sysData.tool_use_id === 'string'
-                ? sysData.tool_use_id
-                : undefined;
-            const subagent =
-              (taskId ? subagentsByTaskId.get(taskId) : undefined) ??
-              (toolUseId ? subagentNodesByToolId.get(toolUseId) : undefined);
-            if (subagent && status === 'completed' && summary?.trim()) {
-              if (taskId) subagentsByTaskId.set(taskId, subagent);
-              const existing = subagent.children.find(
-                (child) => child.meta?.result_role === 'subagent_return',
-              );
-              if (existing) {
-                existing.timestamp = ts;
-                existing.body = summary;
-                existing.raw = msg;
-              } else {
-                subagent.children.push({
-                  id: `${event.id}-sub-result-${i}`,
-                  kind: 'result',
-                  timestamp: ts,
-                  label: 'Branch findings',
-                  body: summary,
-                  children: [],
-                  raw: msg,
-                  meta: { result_role: 'subagent_return' },
-                });
-              }
-            }
-            continue;
-          }
-
-          if (
-            subtype === 'thinking_tokens' ||
-            subtype === 'init' ||
-            subtype === 'status' ||
-            subtype === 'hook_started' ||
-            subtype === 'hook_response' ||
-            subtype === 'compact_boundary' ||
-            subtype === 'task_updated'
-          ) {
-            continue;
-          }
-
-          if (subtype === 'task_started') {
-            const description =
-              typeof sysData.description === 'string'
-                ? sysData.description
-                : 'Subagent task started';
-            const taskId =
-              typeof sysData.task_id === 'string' ? sysData.task_id : undefined;
-            const toolUseId =
-              typeof sysData.tool_use_id === 'string'
-                ? sysData.tool_use_id
-                : undefined;
-            const taskType = summarizeTaskType(sysData.task_type);
-            const subagentNode = toolUseId
-              ? (subagentNodesByToolId.get(toolUseId) ??
-                pendingToolCalls.get(toolUseId))
-              : undefined;
-
-            if (subagentNode?.kind === 'subagent') {
-              if (subagentNode.label === 'subagent') {
-                subagentNode.label = description;
-              }
-              subagentNode.detail =
-                taskType ?? subagentNode.detail ?? description;
-              subagentNode.meta = {
-                ...(subagentNode.meta ?? {}),
-                ...(taskId ? { task_id: taskId } : {}),
-              };
-              if (taskId) {
-                subagentsByTaskId.set(taskId, subagentNode);
-              }
-
-              activeSubagent = subagentNode;
-              continue;
-            }
-
-            continue;
-          }
-
-          if (subtype === 'task_progress') {
-            // Progress pings duplicate the subagent's real tool activity and
-            // only add noise to the task trace.
-            continue;
-          }
-
-          const desc =
-            typeof sysData.description === 'string'
-              ? sysData.description
-              : typeof sysData.usage === 'string'
-                ? sysData.usage
-                : undefined;
-          currentParent().children.push({
-            id: `${event.id}-sys-${i}`,
-            kind: 'lifecycle',
-            timestamp: ts,
-            label: subtype === 'init' && defaultAgent ? defaultAgent : subtype,
-            detail: subtype === 'init' ? 'init' : desc,
-            badge: subtype === 'init' && defaultAgent ? 'AGENT' : undefined,
-            children: [],
-            raw: msg,
-          });
-          continue;
-        }
-
-        /* ── Coordinator result snapshot ── */
-        if (msg.type === 'result') {
-          const preview =
-            typeof msg.result_preview === 'string' ? msg.result_preview : '';
-          const turns = typeof msg.num_turns === 'number' ? msg.num_turns : 0;
-          stats.totalTurns = turns;
-          const previousNode = root.children[root.children.length - 1];
-          const previousRaw = previousNode?.raw as
-            | Record<string, unknown>
-            | undefined;
-          if (
-            previousNode?.kind === 'assistant' &&
-            !previousRaw?.parent_tool_use_id &&
-            isDuplicateNarrative(previousNode.body, preview)
-          ) {
-            root.children.pop();
-          }
-          const resultNode: TraceNode = {
-            id: `${event.id}-res-${i}`,
-            // The stream result is a coordinator snapshot. session_complete
-            // below promotes only the final snapshot to RESULT Final.
-            kind: 'assistant',
-            timestamp: ts,
-            label: '',
-            body: preview,
-            children: [],
-            raw: msg,
-            meta: {
-              result_role: 'session_result',
-              ...(turns ? { turns: String(turns) } : {}),
-            },
-          };
-          resultNodes.push(resultNode);
-          root.children.push(resultNode);
-        }
-      }
-      continue;
-    }
-
-    /* ── Session complete / error / timeout (top-level events) ── */
-    if (event.event_type === 'session_complete') {
-      // session_complete carries the untruncated final result. Upgrade the
-      // Final Result node (built from the 2k conversation preview) to the full
-      // text so nothing is cut off.
-      const fullResult =
-        typeof data.result === 'string'
-          ? data.result
-          : typeof data.result_preview === 'string'
-            ? data.result_preview
-            : undefined;
-      if (fullResult) {
-        const resultNode =
-          resultNodes[resultNodes.length - 1] ??
-          [...root.children].reverse().find((n) => n.kind === 'result');
-        if (resultNode) {
-          resultNode.kind = 'result';
-          resultNode.label = 'Final';
-          if (fullResult.length > (resultNode.body?.length ?? 0))
-            resultNode.body = fullResult;
-        } else {
-          root.children.push({
-            id: `${event.id}-res`,
-            kind: 'result',
-            timestamp: event.timestamp,
-            label: 'Final',
-            body: fullResult,
-            children: [],
-            raw: data,
-            meta: { result_role: 'session_result' },
-          });
-        }
-      }
-      if (typeof data.input_tokens === 'number')
-        stats.tokensIn = data.input_tokens as number;
-      if (typeof data.output_tokens === 'number')
-        stats.tokensOut = data.output_tokens as number;
-      continue;
-    }
-
-    if (
-      event.event_type === 'session_error' ||
-      event.event_type === 'session_timeout'
-    ) {
-      root.children.push({
-        id: event.id,
-        kind: 'error',
-        timestamp: event.timestamp,
-        label:
-          event.event_type === 'session_error'
-            ? 'Session Error'
-            : 'Session Timeout',
-        body: typeof data.error === 'string' ? data.error : undefined,
-        isError: true,
-        children: [],
-        raw: data,
-      });
-      continue;
-    }
-
-    if (
-      event.event_type === 'approval_requested' ||
-      event.event_type === 'permission_callback' ||
-      event.event_type === 'user_question_requested'
-    ) {
-      currentParent().children.push({
-        id: event.id,
-        kind: 'hook',
-        timestamp: event.timestamp,
-        label: event.event_type.replace(/_/g, ' '),
-        detail:
-          typeof data.tool_name === 'string'
-            ? data.tool_name
-            : typeof data.prompt_preview === 'string'
-              ? data.prompt_preview
-              : undefined,
-        children: [],
-        raw: data,
-      });
-      continue;
-    }
-
-    if (event.event_type === 'hook_event') {
-      const hookName =
-        typeof data.hook_name === 'string' ? data.hook_name : 'hook';
-      const hookStatus =
-        typeof data.status === 'string' ? data.status : 'unknown';
-      const hookEvent =
-        typeof data.hook_event === 'string' ? data.hook_event : undefined;
-      const hookDetail =
-        typeof data.detail === 'string' ? data.detail : undefined;
-
-      currentParent().children.push({
-        id: event.id,
-        kind: 'hook',
-        timestamp: event.timestamp,
-        label: `${hookName} · ${hookStatus}`,
-        detail: hookEvent,
-        body: hookDetail,
-        children: [],
-        raw: data,
-      });
-    }
-  }
-
-  // Completion notifications can arrive before delayed child conversation
-  // batches. Make the terminal finding authoritative, remove its duplicated
-  // assistant narrative, and keep it last within that child branch.
-  for (const subagent of subagentNodesByToolId.values()) {
-    const branchResult = subagent.children.find(
-      (child) => child.meta?.result_role === 'subagent_return',
-    );
-    if (!branchResult) continue;
-    subagent.children = subagent.children.filter(
-      (child) =>
-        child === branchResult ||
-        child.kind !== 'assistant' ||
-        !isDuplicateNarrative(child.body, branchResult.body),
-    );
-    subagent.children = subagent.children.filter(
-      (child) => child !== branchResult,
-    );
-    subagent.children.push(branchResult);
-  }
-
-  function replaceRecipientIds(nodes: TraceNode[]) {
-    for (const node of nodes) {
-      if (node.kind === 'messaging' && node.meta?.recipient_id) {
-        const recipient = subagentNamesByAgentId.get(node.meta.recipient_id);
-        if (recipient) {
-          node.label = node.label.replace(node.meta.recipient_id, recipient);
-          node.meta = { ...node.meta, recipient };
-        }
-      }
-      replaceRecipientIds(node.children);
-    }
-  }
-  replaceRecipientIds(root.children);
-
-  return {
-    root,
-    stats,
-    heartbeats,
-    skillsUsed: Array.from(skillNames).sort(),
-    mcpsUsed: Array.from(mcpServers).sort(),
-  };
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1197,12 +323,21 @@ function TraceNodeView({
   node,
   depth = 0,
   forceOpen,
+  showThinking,
 }: {
   node: TraceNode;
   depth?: number;
   forceOpen?: boolean | null;
+  showThinking?: boolean;
 }) {
-  const hasChildren = node.children.length > 0;
+  const visibleChildren = useMemo(
+    () =>
+      (node.children || []).filter(
+        (c) => showThinking || c.kind !== 'thinking',
+      ),
+    [node.children, showThinking],
+  );
+  const hasChildren = visibleChildren.length > 0;
   const hasBody = Boolean(node.body);
   const defaultState = () => {
     return (
@@ -1217,6 +352,10 @@ function TraceNodeView({
     if (forceOpen === true) setOpen(true);
     else if (forceOpen === false) setOpen(false);
   }, [forceOpen]);
+
+  if (node.kind === 'thinking' && !showThinking) {
+    return null;
+  }
 
   const cfg = getNodeConfig(node);
   const Icon = getTraceIcon(node);
@@ -1284,14 +423,15 @@ function TraceNodeView({
         {/* Children */}
         {open && hasChildren && (
           <div
-            className={`relative mt-1 space-y-1 ${node.children.length > 1 ? 'before:absolute before:top-[14px] before:bottom-[14px] before:left-[11px] before:w-px before:bg-ops-border' : ''}`}
+            className={`relative mt-1 space-y-1 ${visibleChildren.length > 1 ? 'before:absolute before:top-[14px] before:bottom-[14px] before:left-[11px] before:w-px before:bg-ops-border' : ''}`}
           >
-            {node.children.map((child) => (
+            {visibleChildren.map((child) => (
               <TraceNodeView
                 key={child.id}
                 node={child}
                 depth={depth + 1}
                 forceOpen={forceOpen}
+                showThinking={showThinking}
               />
             ))}
           </div>
@@ -1417,39 +557,6 @@ function MiniStat({ label, value }: { label: string; value: string | number }) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Raw event row
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-function RawEventRow({ event }: { event: SessionEvent }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="rounded-btn border border-ops-border bg-ops-surface overflow-hidden">
-      <button
-        onClick={() => setOpen(!open)}
-        className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-ops-surface-raised transition-colors"
-      >
-        <span className="font-mono text-[10px] text-[var(--color-text-tertiary)] tabular-nums w-20 flex-none">
-          {fmtTime(event.timestamp)}
-        </span>
-        <span className="text-xs font-medium text-[var(--color-text-secondary)]">
-          {event.event_type}
-        </span>
-        <span className="ml-auto text-[10px] text-[var(--color-text-tertiary)]">
-          {open ? '▾' : '▸'}
-        </span>
-      </button>
-      {open && (
-        <div className="border-t border-ops-border px-3 pb-3 pt-2">
-          <pre className="max-h-80 overflow-auto text-[10px] text-[var(--color-text-tertiary)] whitespace-pre-wrap break-words font-mono">
-            {JSON.stringify(event.data, null, 2)}
-          </pre>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
    Page component
    ═══════════════════════════════════════════════════════════════════════════ */
 
@@ -1461,14 +568,13 @@ export default function SessionDetailPage() {
     : (taskIdParam ?? '');
   const [session, setSession] = useState<SessionDetail | null>(null);
   const [taskRecord, setTaskRecord] = useState<Task | null>(null);
-  const [events, setEvents] = useState<SessionEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [viewMode, setViewMode] = useState<'tree' | 'raw'>('tree');
   const [showThinking, setShowThinking] = useState(false);
   const [rerunning, setRerunning] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [forceOpen, setForceOpen] = useState<boolean | null>(null);
 
   useEffect(() => {
     if (!taskId) {
@@ -1490,7 +596,6 @@ export default function SessionDetailPage() {
 
         if (task.status === 'queued') {
           setSession(null);
-          setEvents([]);
           return;
         }
 
@@ -1500,10 +605,7 @@ export default function SessionDetailPage() {
           );
           if (cancelled) return;
           setSession(detail);
-          setEvents(detail.events || []);
         } catch {
-          // Keep the last known events so heartbeat dots don't disappear on
-          // a transient fetch failure after the task finishes.
           if (cancelled) return;
           setSession(null);
         }
@@ -1529,13 +631,6 @@ export default function SessionDetailPage() {
       cancelled = true;
     };
   }, [taskId, autoRefresh]);
-
-  const promptForTree = taskRecord?.prompt ?? session?.task?.prompt;
-  const { root, stats, heartbeats, skillsUsed, mcpsUsed } = useMemo(
-    () => buildTree(events, promptForTree, showThinking),
-    [events, promptForTree, showThinking],
-  );
-  const [forceOpen, setForceOpen] = useState<boolean | null>(null);
 
   if (loading)
     return (
@@ -1755,16 +850,37 @@ export default function SessionDetailPage() {
   }
 
   const sessionDetail = session;
+  const trace = sessionDetail.trace;
+  const root = trace?.root ?? {
+    id: 'root',
+    kind: 'session' as const,
+    timestamp: new Date().toISOString(),
+    label: 'Trace',
+    children: [],
+  };
+  const stats = trace?.stats ?? {
+    toolCalls: 0,
+    toolErrors: 0,
+    assistantMessages: 0,
+    subagentSpawns: 0,
+    totalTurns: 0,
+    tokensIn: 0,
+    tokensOut: 0,
+  };
+  const heartbeats = trace?.heartbeats ?? [];
+  const skillsUsed = trace?.skillsUsed ?? [];
+  const mcpsUsed = trace?.mcpsUsed ?? [];
+  const eventCount = trace?.eventCount ?? 0;
 
   const finalTokenTotal =
-    sessionDetail.tokens_input + sessionDetail.tokens_output;
+    (sessionDetail.tokens_input ?? 0) + (sessionDetail.tokens_output ?? 0);
   const totalTokens = Math.max(finalTokenTotal, task.tokens_used);
   const hasFinalTokenTotals = finalTokenTotal > 0;
   const inputTokensDisplay = hasFinalTokenTotals
-    ? sessionDetail.tokens_input.toLocaleString()
+    ? (sessionDetail.tokens_input ?? 0).toLocaleString()
     : '-';
   const outputTokensDisplay = hasFinalTokenTotals
-    ? sessionDetail.tokens_output.toLocaleString()
+    ? (sessionDetail.tokens_output ?? 0).toLocaleString()
     : '-';
   const totalTokensDisplay =
     totalTokens > 0
@@ -1776,8 +892,10 @@ export default function SessionDetailPage() {
     heartbeats.length > 1
       ? Math.round(
           heartbeats.slice(1).reduce((sum, hb, idx) => {
-            const cur = new Date(hb.timestamp).getTime();
-            const prev = new Date(heartbeats[idx].timestamp).getTime();
+            const cur = new Date(hb.timestamp as string).getTime();
+            const prev = new Date(
+              heartbeats[idx].timestamp as string,
+            ).getTime();
             return sum + (cur - prev) / 1000;
           }, 0) /
             (heartbeats.length - 1),
@@ -1928,44 +1046,26 @@ export default function SessionDetailPage() {
                   Collapse
                 </button>
               </div>
-              <div className="flex rounded-btn border border-ops-border bg-ops-surface p-0.5 text-xs">
-                {(['tree', 'raw'] as const).map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => setViewMode(m)}
-                    className={`rounded-[8px] px-2.5 py-1 transition-all ${viewMode === m ? 'bg-ops-surface-raised text-[var(--color-text-primary)] font-medium' : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)]'}`}
-                  >
-                    {m === 'tree' ? 'Tree' : 'Raw'}
-                  </button>
-                ))}
-              </div>
             </div>
           </div>
 
-          {viewMode === 'tree' ? (
-            <div className="space-y-1">
-              {root.children.length === 0 ? (
-                <p className="py-16 text-center text-[var(--color-text-tertiary)]">
-                  No trace entries yet
-                </p>
-              ) : (
-                root.children.map((child) => (
-                  <TraceNodeView
-                    key={child.id}
-                    node={child}
-                    depth={0}
-                    forceOpen={forceOpen}
-                  />
-                ))
-              )}
-            </div>
-          ) : (
-            <div className="space-y-1.5">
-              {events.map((event) => (
-                <RawEventRow key={event.id} event={event} />
-              ))}
-            </div>
-          )}
+          <div className="space-y-1">
+            {root.children.length === 0 ? (
+              <p className="py-16 text-center text-[var(--color-text-tertiary)]">
+                No trace entries yet
+              </p>
+            ) : (
+              root.children.map((child) => (
+                <TraceNodeView
+                  key={child.id}
+                  node={child}
+                  depth={0}
+                  forceOpen={forceOpen}
+                  showThinking={showThinking}
+                />
+              ))
+            )}
+          </div>
         </section>
 
         {/* Sidebar */}
@@ -1987,7 +1087,7 @@ export default function SessionDetailPage() {
                 label="HB Gap"
                 value={avgHeartbeatGap != null ? `${avgHeartbeatGap}s` : '-'}
               />
-              <MiniStat label="Events" value={events.length} />
+              <MiniStat label="Events" value={eventCount} />
             </div>
           </section>
 
@@ -2097,7 +1197,7 @@ export default function SessionDetailPage() {
             <div className="flex flex-wrap gap-1">
               {heartbeats.slice(-60).map((hb, idx, arr) => (
                 <span
-                  key={hb.id}
+                  key={(hb.id as string) || idx}
                   className={`h-1.5 w-1.5 rounded-full ${
                     TERMINAL_STATUSES.has(task.status)
                       ? 'bg-ops-border'
@@ -2105,7 +1205,7 @@ export default function SessionDetailPage() {
                         ? 'bg-[var(--color-success)]'
                         : 'bg-ops-border'
                   }`}
-                  title={fmt(hb.timestamp)}
+                  title={fmt((hb.timestamp as string) || '')}
                 />
               ))}
               {heartbeats.length === 0 && (

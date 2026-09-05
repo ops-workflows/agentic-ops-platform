@@ -9,6 +9,7 @@ __pycache__/
 .python-version
 node_modules/
 .next/
+*.tsbuildinfo
 dist/
 build/
 .DS_Store

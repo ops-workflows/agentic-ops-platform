@@ -71,6 +71,54 @@ async def test_message_reply_endpoint_returns_websocket_ingested_reply(
 
 
 @pytest.mark.asyncio
+async def test_session_detail_endpoint_returns_parsed_trace(
+    async_engine, fixture_workflows_dir: Path, db_session
+) -> None:
+    from shared.lib.models import SessionEvent, Task
+
+    task = Task(
+        id=uuid.uuid4(),
+        workflow="platform-test",
+        prompt="Investigate alert",
+        status="succeeded",
+    )
+    db_session.add(task)
+    await db_session.commit()
+    db_session.add(
+        SessionEvent(
+            task_id=task.id,
+            event_type="session_start",
+            timestamp=datetime.now(UTC),
+            data={"agent": "test-coordinator", "prompt_preview": "Investigate alert"},
+        )
+    )
+    db_session.add(
+        SessionEvent(
+            task_id=task.id,
+            event_type="session_complete",
+            timestamp=datetime.now(UTC),
+            data={"result": "All clear", "input_tokens": 100, "output_tokens": 50},
+        )
+    )
+    await db_session.commit()
+
+    async with await _make_client(fixture_workflows_dir) as client:
+        response = await client.get(f"/api/sessions/{task.id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "trace" in payload
+    assert payload["trace"]["root"]["label"] == "test-coordinator"
+    assert len(payload["trace"]["root"]["children"]) == 2
+    assert payload["trace"]["root"]["children"][0]["badge"] == "REQUEST"
+    assert payload["trace"]["root"]["children"][1]["label"] == "Final"
+    assert payload["trace"]["root"]["children"][1]["body"] == "All clear"
+    assert payload["trace"]["stats"]["tokensIn"] == 100
+    assert payload["trace"]["stats"]["tokensOut"] == 50
+    assert "events" not in payload
+
+
+@pytest.mark.asyncio
 async def test_unknown_route_returns_404(async_engine, fixture_workflows_dir: Path) -> None:
     async with await _make_client(fixture_workflows_dir) as client:
         resp = await client.get("/definitely-not-a-route")

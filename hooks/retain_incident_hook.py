@@ -170,34 +170,63 @@ def _build_session_trace(session_detail: dict[str, Any] | None, result_text: str
     tool_names_by_id: dict[str, str] = {}
     tool_name_counts: Counter[str] = Counter()
 
-    for event in (session_detail or {}).get("events") or []:
-        if event.get("event_type") != "conversation_batch":
-            continue
-        data = event.get("data") or {}
-        for message in data.get("messages") or []:
-            msg_type = message.get("type")
-            if msg_type == "assistant":
-                for block in message.get("content") or []:
-                    block_type = block.get("type")
-                    if block_type == "tool_use":
-                        tool_name = str(block.get("name") or "unknown_tool")
-                        tool_id = str(block.get("id") or "")
-                        if tool_id:
-                            tool_names_by_id[tool_id] = tool_name
-                        tool_name_counts[tool_name] += 1
-                        preview = _clip(str(block.get("input_preview") or ""), TOOL_INPUT_PREVIEW_LIMIT)
-                        tool_calls.append(f"{tool_name}: {preview}" if preview else tool_name)
-                    elif block_type == "text":
-                        note = _clip(str(block.get("text") or ""), 220)
-                        if note:
-                            assistant_notes.append(note)
-            elif msg_type == "tool_result":
-                tool_name = tool_names_by_id.get(str(message.get("tool_use_id") or ""), "unknown_tool")
-                preview = _clip(str(message.get("content_preview") or ""), TOOL_RESULT_PREVIEW_LIMIT)
-                if message.get("is_error"):
-                    tool_errors.append(f"{tool_name}: {preview}" if preview else tool_name)
+    events = (session_detail or {}).get("events") or []
+    if events:
+        for event in events:
+            if event.get("event_type") != "conversation_batch":
+                continue
+            data = event.get("data") or {}
+            for message in data.get("messages") or []:
+                msg_type = message.get("type")
+                if msg_type == "assistant":
+                    for block in message.get("content") or []:
+                        block_type = block.get("type")
+                        if block_type == "tool_use":
+                            tool_name = str(block.get("name") or "unknown_tool")
+                            tool_id = str(block.get("id") or "")
+                            if tool_id:
+                                tool_names_by_id[tool_id] = tool_name
+                            tool_name_counts[tool_name] += 1
+                            preview = _clip(str(block.get("input_preview") or ""), TOOL_INPUT_PREVIEW_LIMIT)
+                            tool_calls.append(f"{tool_name}: {preview}" if preview else tool_name)
+                        elif block_type == "text":
+                            note = _clip(str(block.get("text") or ""), 220)
+                            if note:
+                                assistant_notes.append(note)
+                elif msg_type == "tool_result":
+                    tool_name = tool_names_by_id.get(str(message.get("tool_use_id") or ""), "unknown_tool")
+                    preview = _clip(str(message.get("content_preview") or ""), TOOL_RESULT_PREVIEW_LIMIT)
+                    if message.get("is_error"):
+                        tool_errors.append(f"{tool_name}: {preview}" if preview else tool_name)
+                    else:
+                        tool_results.append(f"{tool_name}: {preview}" if preview else tool_name)
+    elif (session_detail or {}).get("trace"):
+        root = (session_detail or {}).get("trace", {}).get("root") or {}
+
+        def _traverse(node: dict[str, Any]) -> None:
+            kind = node.get("kind")
+            label = str(node.get("label") or "")
+            body = str(node.get("body") or "")
+            if kind == "tool_call":
+                tool_name = label.split(" · ")[-1] if " · " in label else label
+                tool_name_counts[tool_name] += 1
+                preview = _clip(body, TOOL_INPUT_PREVIEW_LIMIT)
+                tool_calls.append(f"{tool_name}: {preview}" if preview else tool_name)
+            elif kind == "tool_result":
+                preview = _clip(body, TOOL_RESULT_PREVIEW_LIMIT)
+                if node.get("isError") or node.get("is_error"):
+                    tool_errors.append(f"{label or 'tool'}: {preview}" if preview else (label or "tool"))
                 else:
-                    tool_results.append(f"{tool_name}: {preview}" if preview else tool_name)
+                    tool_results.append(f"{label or 'tool'}: {preview}" if preview else (label or "tool"))
+            elif kind == "assistant":
+                note = _clip(body, 220)
+                if note:
+                    assistant_notes.append(note)
+            for child in node.get("children") or []:
+                if isinstance(child, dict):
+                    _traverse(child)
+
+        _traverse(root)
 
     repeated_tools = [f"{name} x{count}" for name, count in tool_name_counts.items() if count > 1]
     successful_tools: list[str] = []
