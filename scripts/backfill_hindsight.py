@@ -47,14 +47,6 @@ def _result_text(task: dict[str, Any]) -> str:
 
 
 def _session_result_text(session_detail: dict[str, Any] | None) -> str:
-    for event in reversed((session_detail or {}).get("events") or []):
-        if event.get("event_type") != "session_complete":
-            continue
-        data = event.get("data") or {}
-        result = data.get("result")
-        if isinstance(result, str) and result.strip():
-            return result.strip()
-    # Check trace root for final result if events not returned
     trace = (session_detail or {}).get("trace") or {}
     root = trace.get("root") or {}
     for child in reversed(root.get("children") or []):
